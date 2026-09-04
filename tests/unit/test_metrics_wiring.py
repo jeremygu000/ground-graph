@@ -126,22 +126,11 @@ def test_dashboard_references_groundgraph_application_job() -> None:
     assert 'up{job="groundgraph-application"}' in joined
 
 
-def test_phoenix_image_has_prometheus_port_exposed() -> None:
-    """Phoenix container must expose its internal :9090 metrics port
-    so Prometheus can reach it. (Host mapping is to :9091 to avoid
-    collision with the local Prometheus server.)
-    """
+def test_phoenix_prometheus_metrics_are_enabled() -> None:
+    """Phoenix must expose Prometheus metrics for the in-network scrape."""
     compose = _load_yaml(COMPOSE)
-    ports = compose["services"]["phoenix"].get("ports", []) or []
-    for p in ports:
-        if isinstance(p, str) and (p.endswith(":9090") or p.endswith(":9091")):
-            break
-        if isinstance(p, dict) and str(p.get("target", "")) == "9090":
-            break
     env = compose["services"]["phoenix"].get("environment", {})
-    assert env.get("PHOENIX_ENABLE_PROMETHEUS") == "true", (
-        "Phoenix must enable its Prometheus metrics endpoint"
-    )
+    assert env.get("PHOENIX_ENABLE_PROMETHEUS") == "true"
 
 
 def test_no_port_collision_on_9090() -> None:

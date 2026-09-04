@@ -80,3 +80,5 @@ phoenix/
 # Build outputs
 .mypy_cache
 .pyrightconfig.json.bak
+docs/agentic-graphrag-integrating-graphs-enterprise-ai.epub
+docs/obsidian/

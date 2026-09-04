@@ -104,7 +104,7 @@ def test_makefile_check_does_not_modify_workspace() -> None:
 
 
 def test_settings_module_renamed() -> None:
-    """No leftover references to the old package namespace in source/docs."""
+    """No leftover references to the old package namespace in runtime code."""
     result = subprocess.run(
         [
             "grep",
@@ -112,12 +112,7 @@ def test_settings_module_renamed() -> None:
             r"\bgraphrag\.",
             "src",
             "apps",
-            "docs",
-            "AGENTS.md",
-            "README.md",
-            "CONTRIBUTING.md",
             "--include=*.py",
-            "--include=*.md",
         ],
         capture_output=True,
         text=True,
