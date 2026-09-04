@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 from opentelemetry import context
 from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry.metrics import Meter
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import MetricReader, PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import Resource
@@ -160,6 +161,11 @@ def configure_meter_provider(
     else:
         provider = MeterProvider(resource=resource)
     return provider
+
+
+def get_meter(provider: MeterProvider, name: str) -> Meter:
+    """Get a named meter from *provider*."""
+    return provider.get_meter(name)
 
 
 def shutdown_meter_provider(provider: MeterProvider | None) -> None:

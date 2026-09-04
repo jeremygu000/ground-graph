@@ -30,7 +30,6 @@ class _Checker:
             name=self.name,
             healthy=self.healthy,
             reason_code=self.reason_code if not self.healthy else HealthReasonCode.OK,
-            details=None if self.healthy else f"{self.name} failed",
         )
 
 
@@ -66,7 +65,7 @@ async def test_health_service_timeout_returns_safe_reason() -> None:
     results = await service.check_all()
     assert results[0].healthy is False
     assert results[0].reason_code is HealthReasonCode.TIMEOUT
-    assert results[0].details == "dependency timed out"
+    assert results[0].details is None
 
 
 @pytest.mark.anyio

@@ -10,7 +10,6 @@ from groundgraph.application.health import (
     readiness_http_status,
     readiness_status,
 )
-from groundgraph.infrastructure.metrics import READINESS_DEPENDENCY_HEALTH
 
 router = APIRouter(tags=["health"])
 
@@ -39,9 +38,13 @@ async def ready(
     response: Response,
 ) -> HealthResponse:
     health_service: HealthService = request.app.state.health_service
+    app_metrics = request.app.state.app_metrics
     dependencies = await health_service.check_all()
     for dependency in dependencies:
-        READINESS_DEPENDENCY_HEALTH.labels(dependency.name).set(int(dependency.healthy))
+        app_metrics.readiness_dependency_healthy.add(
+            1 if dependency.healthy else 0,
+            {"dependency": dependency.name},
+        )
     response.status_code = readiness_http_status(dependencies)
     public_dependencies = [
         PublicDependencyHealth(

@@ -15,7 +15,6 @@ from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.sdk.metrics.export import MetricReader
 from opentelemetry.sdk.trace.export import SpanExporter
 from opentelemetry.trace import Span
-from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from groundgraph.api.dependencies import build_health_service, request_id_from_headers
 from groundgraph.api.health import router as health_router
@@ -26,14 +25,11 @@ from groundgraph.infrastructure.logging import (
     clear_request_context,
     configure_json_logging,
 )
-from groundgraph.infrastructure.metrics import (
-    HTTP_REQUEST_COUNT,
-    HTTP_REQUEST_DURATION,
-    HTTP_REQUEST_ERRORS,
-)
+from groundgraph.infrastructure.metrics import AppMetrics, init_app_metrics
 from groundgraph.infrastructure.telemetry import (
     configure_meter_provider,
     configure_tracing,
+    get_meter,
     sanitize_attributes,
     shutdown_meter_provider,
     shutdown_tracing,
@@ -41,18 +37,28 @@ from groundgraph.infrastructure.telemetry import (
 
 SERVER_ERROR_STATUS = 500
 
+_ROUTE_EXCLUDE_METRICS = frozenset(
+    {
+        "/health/live",
+        "/health/ready",
+        "/metrics",
+        "/docs",
+        "/redoc",
+    }
+)
+
+
+def _is_excluded_route(route: str) -> bool:
+    return route in _ROUTE_EXCLUDE_METRICS
+
 
 def _safe_route(request: Request) -> str:
-    route = getattr(request.scope.get("route"), "path", None)
-    return route if isinstance(route, str) else "__unmatched__"
-
-
-_ROUTE_EXCLUDE_METRICS = frozenset({"health/live", "health/ready", "metrics", "docs", "redoc"})
-
-
-def _metrics_route(request: Request) -> str:
-    route = _safe_route(request)
-    return route if route not in _ROUTE_EXCLUDE_METRICS else "__engine__"
+    """Return route path from the matched route, or '__unmatched__' if no route matched."""
+    route_obj = request.scope.get("route")
+    if route_obj is None:
+        return "__unmatched__"
+    path = getattr(route_obj, "path", None)
+    return path if isinstance(path, str) else "__unmatched__"
 
 
 def _server_request_hook(span: Span, scope: dict[str, object]) -> None:
@@ -115,6 +121,7 @@ def create_app(  # noqa: PLR0915 - composition root keeps app lifecycle wiring t
     span_exporter: SpanExporter | None = None,
     metric_reader: MetricReader | None = None,
     telemetry_enabled: bool | None = None,
+    app_metrics: AppMetrics | None = None,
 ) -> FastAPI:
     """Create the API application.
 
@@ -140,6 +147,10 @@ def create_app(  # noqa: PLR0915 - composition root keeps app lifecycle wiring t
         otlp_insecure=settings.otel_exporter_otlp_insecure,
     )
 
+    if app_metrics is None:
+        meter = get_meter(meter_provider, settings.otel_service_name)
+        app_metrics = init_app_metrics(meter)
+
     instrumented = tracing_enabled or span_exporter is not None
 
     @asynccontextmanager
@@ -154,13 +165,14 @@ def create_app(  # noqa: PLR0915 - composition root keeps app lifecycle wiring t
     app.state.settings = settings
     app.state.tracer_provider = tracer_provider
     app.state.meter_provider = meter_provider
-    app.state.health_service = health_service or build_health_service(settings)
-    app.include_router(health_router)
+    app.state.app_metrics = app_metrics
 
-    @app.get("/metrics", include_in_schema=False)
-    async def metrics() -> Response:
-        """Expose Prometheus metrics without accepting request content."""
-        return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
+    health = health_service or build_health_service(settings)
+    tracer = tracer_provider.get_tracer(settings.otel_service_name)
+    health.tracer = tracer
+    app.state.health_service = health
+
+    app.include_router(health_router)
 
     @app.get("/docs", include_in_schema=False)
     async def swagger_ui() -> HTMLResponse:
@@ -197,22 +209,18 @@ def create_app(  # noqa: PLR0915 - composition root keeps app lifecycle wiring t
                 "span_id": format(span_context.span_id, "016x"),
             }
         )
-        route = _safe_route(request)
-        metrics_route = _metrics_route(request)
         status_code: int | None = None
         response: Response | None = None
+        error_type: str | None = None
         try:
             response = await call_next(request)
             status_code = response.status_code
-        except Exception:
+        except Exception as exc:
             status_code = SERVER_ERROR_STATUS
+            error_type = type(exc).__name__
         finally:
             duration = time.perf_counter() - started
-            if status_code == SERVER_ERROR_STATUS:
-                response = JSONResponse(
-                    status_code=SERVER_ERROR_STATUS,
-                    content={"code": "internal_error", "message": "Internal server error"},
-                )
+            route = _safe_route(request)
             for key, value in sanitize_attributes(
                 {
                     "groundgraph.request_id": request_id,
@@ -222,34 +230,47 @@ def create_app(  # noqa: PLR0915 - composition root keeps app lifecycle wiring t
                 }
             ).items():
                 span.set_attribute(key, value)
-            if status_code != SERVER_ERROR_STATUS:
-                HTTP_REQUEST_COUNT.labels(request.method, metrics_route, str(status_code)).inc()
-                HTTP_REQUEST_DURATION.labels(request.method, metrics_route).observe(duration)
+
+            if not _is_excluded_route(route):
+                metrics = app_metrics
+                metrics.http_request_count.add(
+                    1, {"method": request.method, "route": route, "status_code": str(status_code)}
+                )
+                metrics.http_request_duration.record(
+                    duration, {"method": request.method, "route": route}
+                )
+                if status_code is not None and status_code >= SERVER_ERROR_STATUS:
+                    metrics.http_request_errors.add(
+                        1,
+                        {
+                            "method": request.method,
+                            "route": route,
+                            "exception_type": error_type or "server_error",
+                        },
+                    )
                 _log_request(
-                    "http.request.completed",
+                    "http.request.completed" if error_type is None else "http.request.failed",
                     method=request.method,
                     route=route,
                     status_code=status_code,
                     duration_seconds=duration,
+                    error_type=error_type,
                 )
-            else:
-                HTTP_REQUEST_ERRORS.labels(request.method, metrics_route, "server_error").inc()
-                _log_request(
-                    "http.request.failed",
-                    method=request.method,
-                    route=route,
-                    status_code=status_code,
-                    duration_seconds=duration,
-                )
+
             clear_request_context()
-        assert response is not None
+
+        if response is None:
+            response = JSONResponse(
+                status_code=SERVER_ERROR_STATUS,
+                content={"code": "internal_error", "message": "Internal server error"},
+            )
+            status_code = SERVER_ERROR_STATUS
+
         response.headers["x-request-id"] = request_id
         response.headers["x-correlation-id"] = correlation_id
         response.headers["x-process-time-ms"] = f"{(time.perf_counter() - started) * 1000:.3f}"
         return response
 
-    # Add the OpenTelemetry middleware last, making it the outer request
-    # middleware. The request context middleware can then enrich its server span.
     if instrumented:
         FastAPIInstrumentor.instrument_app(
             app,

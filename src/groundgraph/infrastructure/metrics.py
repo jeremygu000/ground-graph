@@ -1,29 +1,43 @@
-"""Prometheus metrics for the API boundary."""
+"""OTel metrics for the API boundary.
+
+All instruments are created from the app-local MeterProvider so that test code
+can inject an InMemoryMetricReader and assert on recorded values without any
+network export.
+"""
 
 from __future__ import annotations
 
-from prometheus_client import Counter, Gauge, Histogram
+from dataclasses import dataclass
 
-HTTP_REQUEST_COUNT = Counter(
-    "groundgraph_http_requests_total",
-    "Total HTTP requests observed by the API boundary.",
-    ("method", "route", "status_code"),
-)
+from opentelemetry.metrics import Counter, Histogram, Meter, UpDownCounter
 
-HTTP_REQUEST_ERRORS = Counter(
-    "groundgraph_http_request_errors_total",
-    "Total HTTP request failures observed by the API boundary.",
-    ("method", "route", "exception_type"),
-)
 
-HTTP_REQUEST_DURATION = Histogram(
-    "groundgraph_http_request_duration_seconds",
-    "HTTP request duration in seconds.",
-    ("method", "route"),
-)
+@dataclass
+class AppMetrics:
+    http_request_count: Counter
+    http_request_errors: Counter
+    http_request_duration: Histogram
+    readiness_dependency_healthy: UpDownCounter
 
-READINESS_DEPENDENCY_HEALTH = Gauge(
-    "groundgraph_readiness_dependency_healthy",
-    "Whether a required readiness dependency is healthy (1) or unhealthy (0).",
-    ("dependency",),
-)
+
+def init_app_metrics(meter: Meter) -> AppMetrics:
+    """Create API-bound instruments from *meter*."""
+    return AppMetrics(
+        http_request_count=meter.create_counter(
+            "groundgraph.http.requests",
+            description="Total HTTP requests observed by the API boundary.",
+        ),
+        http_request_errors=meter.create_counter(
+            "groundgraph.http.request.errors",
+            description="Total HTTP request failures (5xx).",
+        ),
+        http_request_duration=meter.create_histogram(
+            "groundgraph.http.request.duration",
+            description="HTTP request duration in seconds.",
+            unit="s",
+        ),
+        readiness_dependency_healthy=meter.create_up_down_counter(
+            "groundgraph.readiness.dependency.healthy",
+            description="Whether a required readiness dependency is healthy (+1) or unhealthy (0).",
+        ),
+    )

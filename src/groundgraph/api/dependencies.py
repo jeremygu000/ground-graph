@@ -60,7 +60,6 @@ class PostgresHealthChecker:
                 name=self.name,
                 healthy=False,
                 reason_code=HealthReasonCode.UNHEALTHY,
-                details="postgres query failed",
             )
 
     def __init__(self, host: str, port: int, user: str, password: str, database: str) -> None:
@@ -93,7 +92,6 @@ class Neo4jHealthChecker:
                 name=self.name,
                 healthy=False,
                 reason_code=HealthReasonCode.UNHEALTHY,
-                details="neo4j query failed",
             )
 
     def __init__(self, uri: str, user: str, password: str) -> None:
@@ -117,14 +115,12 @@ class MinioHealthChecker:
                     name=self.name,
                     healthy=False,
                     reason_code=HealthReasonCode.UNHEALTHY,
-                    details="minio not ready",
                 )
         except Exception:
             return DependencyHealth(
                 name=self.name,
                 healthy=False,
                 reason_code=HealthReasonCode.UNHEALTHY,
-                details="minio health check failed",
             )
 
     def __init__(self, endpoint: str) -> None:

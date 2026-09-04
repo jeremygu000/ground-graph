@@ -6,7 +6,7 @@ import asyncio
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, cast, runtime_checkable
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Tracer
@@ -56,40 +56,52 @@ class HealthService:
 
         tracer = self.tracer or trace.get_tracer(__name__)
         operation = "check"
+        server_span = trace.get_current_span()
+        server_span_ctx = server_span.get_span_context()
         with tracer.start_as_current_span(
             f"healthcheck.{name}",
             kind=trace.SpanKind.CLIENT,
         ) as span:
+            if span.is_recording():
+                parent_ctx = cast("trace.SpanContext | None", getattr(span, "parent", None))
+                if parent_ctx is not None:
+                    assert parent_ctx.span_id == server_span_ctx.span_id, (
+                        f"healthcheck.{name} child span parent span_id mismatch: "
+                        f"expected {server_span_ctx.span_id!r}, got {parent_ctx.span_id!r}"
+                    )
             span.set_attribute("dependency.name", name)
             span.set_attribute("dependency.operation", operation)
+            start = asyncio.get_event_loop().time()
             try:
                 result = await asyncio.wait_for(checker.check(), timeout=self.timeout_seconds)
+                duration_ms = (asyncio.get_event_loop().time() - start) * 1000
                 span.set_attribute(
                     "dependency.result", "healthy" if result.healthy else "unhealthy"
                 )
                 span.set_attribute("dependency.reason_code", result.reason_code.value)
-                if result.details:
-                    span.set_attribute("dependency.details", result.details)
+                span.set_attribute("duration_ms", round(duration_ms, 3))
                 if not result.healthy:
                     span.set_attribute("error.type", result.reason_code.value)
-                return result  # noqa: TRY300 - unconditional return after span setup
+                return result  # noqa: TRY300 - conditional error.type requires pre-return setup
             except TimeoutError:
+                duration_ms = (asyncio.get_event_loop().time() - start) * 1000
                 span.set_attribute("dependency.result", "timeout")
                 span.set_attribute("error.type", "TimeoutError")
+                span.set_attribute("duration_ms", round(duration_ms, 3))
                 return DependencyHealth(
                     name=name,
                     healthy=False,
                     reason_code=HealthReasonCode.TIMEOUT,
-                    details="dependency timed out",
                 )
             except Exception as exc:
+                duration_ms = (asyncio.get_event_loop().time() - start) * 1000
                 span.set_attribute("dependency.result", "error")
                 span.set_attribute("error.type", type(exc).__name__)
+                span.set_attribute("duration_ms", round(duration_ms, 3))
                 return DependencyHealth(
                     name=name,
                     healthy=False,
                     reason_code=HealthReasonCode.ERROR,
-                    details="dependency probe failed",
                 )
 
 
