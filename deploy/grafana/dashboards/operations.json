@@ -4,8 +4,14 @@
   "schemaVersion": 39,
   "version": 2,
   "refresh": "30s",
-  "tags": ["groundgraph", "operations"],
-  "time": { "from": "now-1h", "to": "now" },
+  "tags": [
+    "groundgraph",
+    "operations"
+  ],
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
   "templating": {
     "list": [
       {
@@ -23,7 +29,12 @@
     {
       "type": "stat",
       "title": "Scrape targets up",
-      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      },
       "targets": [
         {
           "expr": "up{job=~\"$job\"}",
@@ -35,10 +46,15 @@
     {
       "type": "timeseries",
       "title": "OTel Collector - received spans/s (self-telemetry, :8888)",
-      "gridPos": { "h": 8, "w": 12, "x": 6, "y": 0 },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 6,
+        "y": 0
+      },
       "targets": [
         {
-          "expr": "rate(otelcol_receiver_accepted_spans{job=\"otel-collector-internal\"}[1m])",
+          "expr": "rate(otelcol_receiver_accepted_spans{job=\"otel-collector-internal\"}[5m])",
           "legendFormat": "{{receiver}}",
           "refId": "A"
         }
@@ -47,10 +63,15 @@
     {
       "type": "timeseries",
       "title": "OTel Collector - refused spans/s (self-telemetry, :8888)",
-      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 4 },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 0,
+        "y": 4
+      },
       "targets": [
         {
-          "expr": "rate(otelcol_receiver_refused_spans{job=\"otel-collector-internal\"}[1m])",
+          "expr": "rate(otelcol_receiver_refused_spans{job=\"otel-collector-internal\"}[5m])",
           "legendFormat": "{{receiver}}",
           "refId": "A"
         }
@@ -59,7 +80,12 @@
     {
       "type": "timeseries",
       "title": "Application metrics target (:8889)",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 12
+      },
       "targets": [
         {
           "expr": "up{job=\"groundgraph-application\"}",
@@ -71,7 +97,12 @@
     {
       "type": "timeseries",
       "title": "Phoenix self metrics (job: phoenix, :9090)",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 12
+      },
       "targets": [
         {
           "expr": "up{job=\"phoenix\"}",
@@ -82,8 +113,13 @@
     },
     {
       "type": "timeseries",
-      "title": "Request rate (req/s) — groundgraph application",
-      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 20 },
+      "title": "Request rate (req/s) \u2014 groundgraph application",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 20
+      },
       "description": "Incoming request rate from groundgraph.http.requests counter. Requires app to be running for >= 60s for first data to appear (OTel export interval).",
       "targets": [
         {
@@ -95,8 +131,13 @@
     },
     {
       "type": "timeseries",
-      "title": "Error rate (5xx / total) — groundgraph application",
-      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 20 },
+      "title": "Error rate (5xx / total) \u2014 groundgraph application",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 20
+      },
       "description": "Proportion of requests returning 5xx status codes from groundgraph.http.request.errors counter. Requires app to be running for >= 60s for first data.",
       "targets": [
         {
@@ -108,8 +149,13 @@
     },
     {
       "type": "timeseries",
-      "title": "Latency p50 / p95 / p99 (seconds) — groundgraph application",
-      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 20 },
+      "title": "Latency p50 / p95 / p99 (seconds) \u2014 groundgraph application",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 20
+      },
       "description": "Request latency quantiles from groundgraph.http.request.duration histogram. Requires app to be running for >= 60s. Uses histogram_quantile() with bucket aggregation.",
       "targets": [
         {

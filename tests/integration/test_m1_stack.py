@@ -10,6 +10,7 @@ Or manually: docker compose up -d && uv run pytest -m integration -v
 from __future__ import annotations
 
 import asyncio
+import math
 import os
 import subprocess
 import time
@@ -80,6 +81,24 @@ async def _phoenix_list_spans(
     except Exception:
         return []
     return spans
+
+
+def _is_finite_number(value: Any) -> bool:
+    """Return True iff *value* is a finite real number.
+
+    Prometheus serialises samples as strings: "0.123", "1.5e3", "NaN",
+    "+Inf", "-Inf". Empty or non-numeric strings are also rejected.
+    """
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, (int, float)):
+        return math.isfinite(float(value))
+    if isinstance(value, str) and value:
+        try:
+            return math.isfinite(float(value))
+        except ValueError:
+            return False
+    return False
 
 
 async def _phoenix_find_trace_by_request_id(
@@ -459,7 +478,7 @@ class TestGrafanaObservability:
             f"Prometheus datasource should be configured in Grafana, got: {names}"
         )
 
-    async def test_grafana_request_count_and_latency_panels_return_data(
+    async def test_grafana_request_count_and_latency_panels_return_data(  # noqa: PLR0912
         self, docker_stack: Any, app_process: Any
     ) -> None:
         """Validate the operations dashboard end-to-end with REAL data.
@@ -529,6 +548,17 @@ class TestGrafanaObservability:
                     f"is configured (export_interval_millis) and the OTel "
                     f"collector is exporting to its prometheus exporter."
                 )
+                # Every sample value must be a finite real number. Empty
+                # results, NaN, +Inf, -Inf, or non-numeric strings all
+                # indicate a broken metric pipeline (e.g. a divide-by-zero
+                # in a rate query, an uninitialised cumulative counter, or
+                # a Prometheus encoding bug).
+                for sample in result:
+                    raw_value = sample.get("value", [None, None])[1]
+                    assert _is_finite_number(raw_value), (
+                        f"Raw series '{metric}' returned a non-finite sample: "
+                        f"value={raw_value!r} in series {sample.get('metric', {})}"
+                    )
 
         # 4. Load the dashboard and validate every panel and every target.
         async with httpx.AsyncClient(auth=("admin", password)) as client:
@@ -597,6 +627,25 @@ class TestGrafanaObservability:
                             f"Step 3 already proved the underlying series exist, so "
                             f"either the PromQL is wrong or the time window is too narrow."
                         )
+                        # NaN/Inf handling:
+                        #   - Rates and error ratios MUST be finite. NaN here
+                        #     means divide-by-zero, which is a real bug.
+                        #   - histogram_quantile over a sparse rate window is
+                        #     a known PromQL idiom that produces NaN even when
+                        #     the underlying histogram is healthy. We do not
+                        #     reject NaN for the Latency panel; production
+                        #     dashboards wrap it (`clamp_min(..., 0)`) to
+                        #     render as 0.
+                        is_quantile_panel = title.startswith("Latency p50")
+                        for sample in result:
+                            raw_value = sample.get("value", [None, None])[1]
+                            if is_quantile_panel and raw_value == "NaN":
+                                continue
+                            assert _is_finite_number(raw_value), (
+                                f"Panel '{title}' target "
+                                f"'{target.get('legendFormat', '?')}' returned a "
+                                f"non-finite sample: value={raw_value!r}; expr={expr!r}"
+                            )
 
 
 class TestDestructivePostgresRecovery:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 
 import pytest
-from pydantic import SecretStr
+from pydantic import SecretStr, ValidationError
 
 from groundgraph.application.settings import Settings, get_settings, reset_settings_cache
 
@@ -122,3 +122,43 @@ def test_settings_openai_key_value_empty_by_default(monkeypatch: pytest.MonkeyPa
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     settings = Settings(_env_file=None)  # type: ignore[reportCallIssue]
     assert settings.openai_api_key_value == ""
+
+
+class TestOtelMetricExportInterval:
+    """Bounds on otel_metric_export_interval_ms.
+
+    Too low → the SDK hammers the OTel collector with tiny batches, wasting
+    CPU and network. Too high → metrics become useless for live debugging.
+    The bounds (1s .. 5min) are chosen to keep the production default of
+    60s comfortable and to allow integration tests to drop to 5s.
+    """
+
+    def test_default_is_60_000_ms(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("OTEL_METRIC_EXPORT_INTERVAL_MS", raising=False)
+        settings = Settings(_env_file=None)  # type: ignore[reportCallIssue]
+        assert settings.otel_metric_export_interval_ms == 60_000
+
+    def test_in_range_5_000_is_accepted(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OTEL_METRIC_EXPORT_INTERVAL_MS", "5000")
+        settings = Settings(_env_file=None)  # type: ignore[reportCallIssue]
+        assert settings.otel_metric_export_interval_ms == 5_000
+
+    def test_in_range_300_000_is_accepted(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OTEL_METRIC_EXPORT_INTERVAL_MS", "300000")
+        settings = Settings(_env_file=None)  # type: ignore[reportCallIssue]
+        assert settings.otel_metric_export_interval_ms == 300_000
+
+    def test_below_minimum_is_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OTEL_METRIC_EXPORT_INTERVAL_MS", "999")
+        with pytest.raises(ValidationError):
+            Settings(_env_file=None)  # type: ignore[reportCallIssue]
+
+    def test_above_maximum_is_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OTEL_METRIC_EXPORT_INTERVAL_MS", "300001")
+        with pytest.raises(ValidationError):
+            Settings(_env_file=None)  # type: ignore[reportCallIssue]
+
+    def test_non_integer_is_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OTEL_METRIC_EXPORT_INTERVAL_MS", "abc")
+        with pytest.raises(ValidationError):
+            Settings(_env_file=None)  # type: ignore[reportCallIssue]
