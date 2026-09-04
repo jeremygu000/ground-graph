@@ -19,7 +19,7 @@ exporters:
   debug:
     verbosity: basic
   otlphttp/phoenix:
-    endpoint: http://phoenix:6006/v1/traces
+    endpoint: http://phoenix:6006
     tls:
       insecure: true
   prometheus:

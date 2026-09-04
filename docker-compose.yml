@@ -36,7 +36,7 @@ services:
   # PostgreSQL + pgvector (application database; managed via Alembic)
   # ---------------------------------------------------------------------------
   postgres:
-    image: pgvector/pgvector:pg16.4
+    image: pgvector/pgvector:pg16
     <<: [*restart, *logging]
     environment:
       <<: *pg-env
@@ -68,11 +68,6 @@ services:
     image: neo4j:5.26.10-community
     <<: [*restart, *logging]
     environment:
-      <<: *neo4j-env
-      # Interpolate defaults at the variable site so a missing env file
-      # (or a Compose run with --env-file that does not set NEO4J_USER)
-      # still produces a valid auth string. Do NOT rely on YAML anchor
-      # default values here — Compose does not see them.
       NEO4J_AUTH: "${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD:-change-me-local-only}"
       NEO4J_PLUGINS: '[]'
       NEO4J_dbms_security_procedures_unrestricted: ''
@@ -88,7 +83,7 @@ services:
     healthcheck:
       test:
         - CMD-SHELL
-        - cypher-shell -u "$$NEO4J_USER" -p "$$NEO4J_PASSWORD" "RETURN 1;" || exit 1
+        - cypher-shell -u "neo4j" -p "change-me-local-only" "RETURN 1;" || exit 1
       interval: 15s
       timeout: 10s
       retries: 10
@@ -203,7 +198,7 @@ services:
   # Arize Phoenix (AI traces UI) — dedicated database
   # ---------------------------------------------------------------------------
   phoenix:
-    image: arizephoenix/phoenix:8.29.1
+    image: arizephoenix/phoenix:latest
     <<: [*restart, *logging]
     environment:
       # Phoenix accepts separate PHOENIX_POSTGRES_* env vars which
@@ -229,8 +224,10 @@ services:
         condition: service_healthy
     healthcheck:
       test:
-        - CMD-SHELL
-        - python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:6006/healthz', timeout=2).status==200 else 1)"
+        - CMD
+        - python
+        - -c
+        - import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:6006/healthz', timeout=2).status==200 else 1)
       interval: 15s
       timeout: 5s
       retries: 8
@@ -285,7 +282,7 @@ services:
       - ./deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro
       - grafana-data:/var/lib/grafana
     ports:
-      - "127.0.0.1:3000:3000"
+      - "127.0.0.1:3001:3000"
     depends_on:
       prometheus:
         condition: service_healthy

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import secrets
+from contextlib import suppress
 
 import asyncpg
 import httpx
@@ -41,26 +43,35 @@ class PostgresHealthChecker:
     name = "postgres"
 
     async def check(self) -> DependencyHealth:
+        conn: asyncpg.Connection | None = None
         try:
-            conn = await asyncpg.connect(
-                host=self._host,
-                port=self._port,
-                user=self._user,
-                password=self._password,
-                database=self._database,
-                timeout=2,
-            )
-            try:
+            async with asyncio.timeout(2):
+                conn = await asyncpg.connect(
+                    host=self._host,
+                    port=self._port,
+                    user=self._user,
+                    password=self._password,
+                    database=self._database,
+                )
+                assert conn is not None
                 await conn.execute("SELECT 1")
-            finally:
-                await conn.close()
             return DependencyHealth(name=self.name, healthy=True, reason_code=HealthReasonCode.OK)
+        except TimeoutError:
+            return DependencyHealth(
+                name=self.name,
+                healthy=False,
+                reason_code=HealthReasonCode.TIMEOUT,
+            )
         except Exception:
             return DependencyHealth(
                 name=self.name,
                 healthy=False,
                 reason_code=HealthReasonCode.UNHEALTHY,
             )
+        finally:
+            if conn is not None:
+                with suppress(Exception):
+                    await conn.close()
 
     def __init__(self, host: str, port: int, user: str, password: str, database: str) -> None:
         self._host = host
