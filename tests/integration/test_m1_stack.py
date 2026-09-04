@@ -13,6 +13,7 @@ import asyncio
 import os
 import subprocess
 import time
+import uuid
 from typing import Any
 
 import httpx
@@ -27,7 +28,6 @@ def _run_compose(args: list[str], timeout: int = 30) -> subprocess.CompletedProc
 
 
 async def _poll_url(url: str, timeout_sec: float = 30.0, expected_status: int = 200) -> bool:
-    """Poll a URL until it returns expected_status or the timeout expires."""
     deadline = time.monotonic() + timeout_sec
     async with httpx.AsyncClient() as client:
         while time.monotonic() < deadline:
@@ -113,15 +113,38 @@ class TestTracePropagation:
     """Verify that API request traces are forwarded to Phoenix via the OTel Collector."""
 
     async def test_api_trace_appears_in_phoenix(self, docker_stack: Any, app_process: Any) -> None:
+        phoenix_url = f"http://{docker_stack.phoenix_host}:{docker_stack.phoenix_port}"
+
         async with httpx.AsyncClient() as client:
             r = await client.get(
                 f"{docker_stack.api_base_url}/health/ready",
-                headers={"x-request-id": "test-trace-123"},
+                headers={"x-request-id": f"test-trace-{uuid.uuid4().hex[:12]}"},
                 timeout=10.0,
             )
             assert r.status_code == 200
 
-        phoenix_url = f"http://{docker_stack.phoenix_host}:{docker_stack.phoenix_port}"
+        initial_traces: list[str] = []
+        for _ in range(3):
+            try:
+                async with httpx.AsyncClient() as client:
+                    resp = await client.get(
+                        f"{phoenix_url}/v1/projects/default/traces",
+                        timeout=5.0,
+                    )
+                    if resp.status_code == 200:
+                        initial_traces = [t["trace_id"] for t in resp.json().get("data", [])]
+                        break
+            except Exception:
+                pass
+            await asyncio.sleep(1)
+
+        async with httpx.AsyncClient() as client:
+            await client.get(
+                f"{docker_stack.api_base_url}/health/ready",
+                headers={"x-request-id": f"test-trace-{uuid.uuid4().hex[:12]}"},
+                timeout=10.0,
+            )
+
         found = False
         for _ in range(20):
             await asyncio.sleep(3)
@@ -133,15 +156,18 @@ class TestTracePropagation:
                     )
                     if trace_r.status_code == 200:
                         data = trace_r.json()
-                        if len(data.get("data", [])) > 0:
+                        current_traces = [t["trace_id"] for t in data.get("data", [])]
+                        new_traces = [tid for tid in current_traces if tid not in initial_traces]
+                        if new_traces:
                             found = True
                             break
             except Exception:
                 pass
 
         assert found, (
-            "No traces found in Phoenix for service 'groundgraph' after 60s. "
-            "Verify that OTel Collector is exporting spans to Phoenix."
+            "No new trace appeared in Phoenix after API request. "
+            "Verify the OTel Collector is exporting spans to Phoenix and "
+            "Phoenix is storing the trace data."
         )
 
 
@@ -172,24 +198,24 @@ class TestPrometheusMetrics:
     async def test_app_metrics_reach_prometheus(self, docker_stack: Any, app_process: Any) -> None:
         async with httpx.AsyncClient() as client:
             await client.get(f"{docker_stack.api_base_url}/health/ready", timeout=5.0)
-            await asyncio.sleep(2)
 
-        result = _run_compose(
-            [
-                "exec",
-                "-T",
-                "prometheus",
-                "wget",
-                "-qO-",
-                "http://otel-collector:8889/metrics",
-            ],
-            timeout=15,
+        prom_url = f"http://{docker_stack.prometheus_host}:{docker_stack.prometheus_port}"
+        async with httpx.AsyncClient() as client:
+            r = await client.get(
+                f"{prom_url}/api/v1/query",
+                params={"query": "groundgraph_readiness_dependency_healthy"},
+                timeout=10.0,
+            )
+        assert r.status_code == 200, f"Prometheus query API should return 200, got {r.status_code}"
+        data = r.json()
+        assert data.get("status") == "success", (
+            f"Prometheus query failed: {data.get('error', 'unknown')}"
         )
-        assert result.returncode == 0
-        output = result.stdout
-        assert "groundgraph_readiness_dependency_healthy" in output, (
-            "groundgraph_readiness_dependency_healthy metric should be "
-            "present in collector scrape output"
+        result = data.get("data", {}).get("result", [])
+        assert len(result) > 0, (
+            "groundgraph_readiness_dependency_healthy metric should be stored in Prometheus "
+            "after being scraped from the collector. This metric appears immediately; "
+            "Starlette HTTP metrics require >= 60s to appear (OTel export interval)."
         )
 
 
@@ -199,10 +225,11 @@ class TestSecretsRedaction:
     async def test_authorization_header_is_not_in_server_span(
         self, docker_stack: Any, app_process: Any
     ) -> None:
+        secret_token = f"super-secret-token-{uuid.uuid4().hex[:8]}"
         async with httpx.AsyncClient() as client:
             r = await client.get(
-                f"{docker_stack.api_base_url}/health/live",
-                headers={"Authorization": "Bearer super-secret-token-xyz"},
+                f"{docker_stack.api_base_url}/health/ready",
+                headers={"Authorization": f"Bearer {secret_token}"},
                 timeout=5.0,
             )
         assert r.status_code == 200
@@ -211,23 +238,25 @@ class TestSecretsRedaction:
 
         phoenix_url = f"http://{docker_stack.phoenix_host}:{docker_stack.phoenix_port}"
         async with httpx.AsyncClient() as client:
-            try:
-                trace_r = await client.get(
-                    f"{phoenix_url}/v1/projects/default/traces",
-                    timeout=10.0,
-                )
-            except Exception as exc:
-                pytest.fail(f"Phoenix trace API should be reachable: {exc}")
+            trace_r = await client.get(
+                f"{phoenix_url}/v1/projects/default/traces",
+                timeout=10.0,
+            )
 
-        if trace_r.status_code == 200:
-            payload = trace_r.json()
-            trace_text = str(payload).lower()
-            assert "super-secret-token-xyz" not in trace_text, (
-                "Raw secret token must not appear in Phoenix trace data"
+        if trace_r.status_code != 200:
+            pytest.fail(
+                f"Phoenix trace API should return 200, got {trace_r.status_code}: "
+                f"{trace_r.text[:200]}"
             )
-            assert "bearer" not in trace_text or "redacted" in trace_text, (
-                "Authorization header value must be redacted from telemetry"
-            )
+
+        payload = trace_r.json()
+        trace_text = str(payload).lower()
+        assert secret_token not in trace_text, (
+            "Raw secret token must not appear in Phoenix trace data"
+        )
+        assert "bearer" not in trace_text or "redacted" in trace_text, (
+            "Authorization header value must be redacted from telemetry"
+        )
 
 
 class TestGrafanaObservability:
@@ -253,3 +282,42 @@ class TestGrafanaObservability:
         assert "prometheus" in names, (
             f"Prometheus datasource should be configured in Grafana, got: {names}"
         )
+
+    async def test_grafana_dashboard_has_required_panels(
+        self, docker_stack: Any, app_process: Any
+    ) -> None:
+        password = os.environ.get("GRAFANA_PASSWORD", "change-me-local-only")
+        async with httpx.AsyncClient(auth=("admin", password)) as client:
+            r = await client.get(
+                (
+                    f"http://{docker_stack.grafana_host}:{docker_stack.grafana_port}"
+                    "/api/dashboards/uid/groundgraph-operations"
+                ),
+                timeout=10.0,
+            )
+        assert r.status_code == 200, (
+            f"Grafana dashboard API should return 200, got {r.status_code}: {r.text[:200]}"
+        )
+        dashboard = r.json()
+        panels_by_title: dict[str, Any] = {}
+        for panel in dashboard.get("dashboard", {}).get("panels", []):
+            panels_by_title[panel.get("title", "")] = panel
+
+        required_panels = [
+            "Request rate (req/s) — groundgraph application",
+            "Error rate (5xx / total) — groundgraph application",
+            "Latency p50 / p95 / p99 (seconds) — groundgraph application",
+        ]
+        for title in required_panels:
+            assert title in panels_by_title, (
+                f"Required panel '{title}' not found in Grafana dashboard. "
+                f"Available panels: {list(panels_by_title.keys())}"
+            )
+
+        for title in required_panels:
+            panel = panels_by_title[title]
+            assert panel.get("type") in ("timeseries", "stat", "bargauge"), (
+                f"Panel '{title}' should be a timeseries/stat/bargauge, got {panel.get('type')}"
+            )
+            targets = panel.get("targets", [])
+            assert len(targets) > 0, f"Panel '{title}' has no query targets"

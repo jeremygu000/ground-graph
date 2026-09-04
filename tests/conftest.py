@@ -15,7 +15,7 @@ import json
 import os
 import subprocess
 import time
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Generator
 from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Any
@@ -24,6 +24,17 @@ import httpx
 import pytest
 
 DOCKER_COMPOSE_FILE = "docker-compose.yml"
+EXPECTED_SERVICES = frozenset(
+    {
+        "postgres",
+        "neo4j",
+        "minio",
+        "otel-collector",
+        "phoenix",
+        "prometheus",
+        "grafana",
+    }
+)
 
 
 @dataclass
@@ -70,7 +81,7 @@ def _compose_services() -> list[dict[str, Any]]:
     if result.returncode != 0:
         return []
     lines = result.stdout.strip().split("\n")
-    services = []
+    services: list[dict[str, Any]] = []
     for line in lines:
         if line:
             with suppress(Exception):
@@ -88,17 +99,27 @@ def _wait_for_stack_healthy(timeout: int = 180) -> StackServices:
             time.sleep(2)
             continue
 
+        running_names = {svc.get("Service", "") for svc in services}
+        missing = EXPECTED_SERVICES - running_names
+        if missing:
+            time.sleep(2)
+            continue
+
         all_healthy = True
         for svc in services:
+            name = svc.get("Service", "")
+            if name not in EXPECTED_SERVICES:
+                continue
             health = svc.get("Health", "")
-            state = svc.get("State", "")
-            if health in ("healthy", ""):
-                continue
-            if state == "running" and health == "":
-                continue
-            all_healthy = False
+            svc_state = svc.get("State", "")
+            if svc_state != "running":
+                all_healthy = False
+                break
+            if health == "unhealthy":
+                all_healthy = False
+                break
 
-        if all_healthy and len(services) >= 7:
+        if all_healthy:
             break
 
         try:
@@ -119,15 +140,23 @@ def _wait_for_stack_healthy(timeout: int = 180) -> StackServices:
 
 
 @pytest.fixture(scope="session")
-def docker_stack() -> StackServices:
+def docker_stack() -> Generator[StackServices, None, None]:
     """Start docker-compose stack and yield connection info; tear down on exit."""
     compose_up = _run_compose(["up", "-d"], timeout=120)
     if compose_up.returncode != 0:
-        pytest.skip(
-            f"docker compose up failed (may require running Docker daemon):\n"
-            f"stdout: {compose_up.stdout}\n"
-            f"stderr: {compose_up.stderr}"
-        )
+        stderr = compose_up.stderr.lower()
+        if "not found" in stderr or "no such file" in stderr or "docker" not in stderr:
+            pytest.skip(
+                f"Docker CLI is not available on this system:\n"
+                f"stdout: {compose_up.stdout}\n"
+                f"stderr: {compose_up.stderr}"
+            )
+        else:
+            pytest.fail(
+                f"docker compose up failed:\n"
+                f"stdout: {compose_up.stdout}\n"
+                f"stderr: {compose_up.stderr}"
+            )
 
     try:
         services = _wait_for_stack_healthy(timeout=180)
@@ -148,13 +177,6 @@ async def _wait_for_app(base_url: str, timeout_sec: float = 45.0) -> bool:
         except Exception:
             pass
     return False
-
-
-async def _stream_app_logs(proc: Any) -> None:
-    while True:
-        line = proc.stdout.readline()
-        if not line:
-            break
 
 
 @pytest.fixture(scope="session")
@@ -188,8 +210,11 @@ async def app_process(docker_stack: StackServices) -> AsyncGenerator[list[str], 
     )
 
     async def _read_logs() -> None:
+        reader = proc.stdout
+        if reader is None:
+            return
         while True:
-            line = await proc.stdout.readline()
+            line = await reader.readline()
             if not line:
                 break
 
@@ -206,7 +231,8 @@ async def app_process(docker_stack: StackServices) -> AsyncGenerator[list[str], 
     finally:
         read_task.cancel()
         with suppress(Exception):
-            proc.stdout.close()
+            if proc.stdout is not None:
+                await proc.stdout.aclose()
         with suppress(Exception):
             proc.kill()
         await asyncio.sleep(0.1)

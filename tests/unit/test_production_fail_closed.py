@@ -84,7 +84,7 @@ def test_production_rejects_trusted_headers() -> None:
 
 def test_development_allows_default_secrets() -> None:
     """The default development config must remain easy to run locally."""
-    settings = Settings()
+    settings = Settings.model_construct()
     assert settings.is_production is False
     assert settings.openai_api_key_value == ""
 

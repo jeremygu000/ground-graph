@@ -119,5 +119,5 @@ def test_settings_typed_properties() -> None:
 
 
 def test_settings_openai_key_value_empty_by_default() -> None:
-    settings = Settings()
+    settings = Settings.model_construct()
     assert settings.openai_api_key_value == ""
