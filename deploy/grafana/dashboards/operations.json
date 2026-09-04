@@ -1,0 +1,35 @@
+{
+  "title": "Agentic GraphRAG - Operations",
+  "uid": "graphrag-operations",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "tags": ["graphrag", "operations"],
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Scrape targets up",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "targets": [
+        { "expr": "up", "legendFormat": "{{instance}} ({{service}})", "refId": "A" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "OTel Collector received spans/s",
+      "gridPos": { "h": 8, "w": 12, "x": 6, "y": 0 },
+      "targets": [
+        { "expr": "rate(otelcol_receiver_accepted_spans[1m])", "legendFormat": "{{receiver}}", "refId": "A" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "OTel Collector refused spans/s",
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 4 },
+      "targets": [
+        { "expr": "rate(otelcol_receiver_refused_spans[1m])", "legendFormat": "{{receiver}}", "refId": "A" }
+      ]
+    }
+  ]
+}

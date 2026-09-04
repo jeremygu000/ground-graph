@@ -1,0 +1,248 @@
+name: agentic-graphrag
+
+# Local development infrastructure.
+# All services run in containers with health checks and persistent volumes.
+# Production deployment is explicitly out of scope for MVP (see plan.md §1.4).
+
+x-anchor-restart: &restart_policy
+  restart: unless-stopped
+
+x-logging-default: &logging
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL + pgvector
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: graphrag-postgres
+    <<: [*restart_policy, *logging]
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-graphrag}
+      POSTGRES_USER: ${POSTGRES_USER:-graphrag}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-local-only}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./deploy/docker/postgres/initdb.d:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-graphrag} -d ${POSTGRES_DB:-graphrag}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - graphrag-net
+
+  # ---------------------------------------------------------------------------
+  # Neo4j
+  # ---------------------------------------------------------------------------
+  neo4j:
+    image: neo4j:5.26-community
+    container_name: graphrag-neo4j
+    <<: [*restart_policy, *logging]
+    environment:
+      NEO4J_AUTH: ${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD:-change-me-local-only}
+      NEO4J_PLUGINS: '[]'
+      NEO4J_dbms_security_procedures_unrestricted: apoc.*
+      NEO4J_dbms_security_procedures_allowlist: apoc.*
+      NEO4J_server_memory_heap_initial__size: 512m
+      NEO4J_server_memory_heap_max__size: 1g
+      NEO4J_server_memory_pagecache_size: 512m
+    ports:
+      - "7474:7474"   # HTTP browser
+      - "7687:7687"   # Bolt
+    volumes:
+      - neo4j-data:/data
+      - neo4j-logs:/logs
+      - ./deploy/docker/neo4j/import:/var/lib/neo4j/import:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:7474 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
+    networks:
+      - graphrag-net
+
+  # ---------------------------------------------------------------------------
+  # MinIO (S3-compatible object storage)
+  # ---------------------------------------------------------------------------
+  minio:
+    image: minio/minio:RELEASE.2024-09-13T20-26-02Z
+    container_name: graphrag-minio
+    <<: [*restart_policy, *logging]
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-change-me-local-only}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-change-me-local-only}
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # Console
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - graphrag-net
+
+  minio-init:
+    image: minio/mc:RELEASE.2024-09-16T17-43-14Z
+    container_name: graphrag-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 ${S3_ACCESS_KEY:-change-me-local-only} ${S3_SECRET_KEY:-change-me-local-only} &&
+      mc mb -p local/${S3_BUCKET_RAW:-graphrag-raw} || true &&
+      mc mb -p local/${S3_BUCKET_PROCESSED:-graphrag-processed} || true &&
+      mc anonymous set none local/${S3_BUCKET_RAW:-graphrag-raw} &&
+      mc anonymous set none local/${S3_BUCKET_PROCESSED:-graphrag-processed}
+      "
+    restart: "no"
+    networks:
+      - graphrag-net
+
+  # ---------------------------------------------------------------------------
+  # OpenTelemetry Collector
+  # ---------------------------------------------------------------------------
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.111.0
+    container_name: graphrag-otel-collector
+    <<: [*restart_policy, *logging]
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./deploy/docker/otel/collector-config.yaml:/etc/otelcol/config.yaml:ro
+    ports:
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+    depends_on:
+      - postgres
+      - neo4j
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:13133/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - graphrag-net
+
+  # ---------------------------------------------------------------------------
+  # Arize Phoenix (AI traces UI)
+  # ---------------------------------------------------------------------------
+  phoenix:
+    image: arizephoenix/phoenix:8.29.1
+    container_name: graphrag-phoenix
+    <<: [*restart_policy, *logging]
+    environment:
+      PHOENIX_WORK_DIR: /tmp/phoenix
+      PHOENIX_SQL_DATABASE_URL: postgresql://${POSTGRES_USER:-graphrag}:${POSTGRES_PASSWORD:-change-me-local-only}@postgres:5432/${POSTGRES_DB:-graphrag}
+      PHOENIX_ENABLE_AUTH: "false"
+    ports:
+      - "6006:6006"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - phoenix-data:/tmp/phoenix
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:6006/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - graphrag-net
+
+  # ---------------------------------------------------------------------------
+  # Prometheus
+  # ---------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: graphrag-prometheus
+    <<: [*restart_policy, *logging]
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=15d"
+      - "--web.console.libraries=/usr/share/prometheus/console_libraries"
+      - "--web.console.templates=/usr/share/prometheus/consoles"
+      - "--web.enable-lifecycle"
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    depends_on:
+      - otel-collector
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - graphrag-net
+
+  # ---------------------------------------------------------------------------
+  # Grafana
+  # ---------------------------------------------------------------------------
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: graphrag-grafana
+    <<: [*restart_policy, *logging]
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-change-me-local-only}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_INSTALL_PLUGINS: "grafana-clock-panel"
+    volumes:
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - graphrag-net
+
+networks:
+  graphrag-net:
+    name: graphrag-net
+    driver: bridge
+
+volumes:
+  postgres-data:
+    name: graphrag-postgres-data
+  neo4j-data:
+    name: graphrag-neo4j-data
+  neo4j-logs:
+    name: graphrag-neo4j-logs
+  minio-data:
+    name: graphrag-minio-data
+  phoenix-data:
+    name: graphrag-phoenix-data
+  prometheus-data:
+    name: graphrag-prometheus-data
+  grafana-data:
+    name: graphrag-grafana-data
