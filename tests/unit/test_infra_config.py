@@ -144,28 +144,114 @@ def test_docker_compose_all_ports_bind_localhost_only() -> None:
 
 
 def test_phoenix_uses_separate_database() -> None:
-    """Phoenix must connect to its own database, not the application one."""
-    text = COMPOSE_FILE.read_text(encoding="utf-8")
-    parsed = _yaml_load(text)
+    """Phoenix must connect to its own database via the canonical
+    PHOENIX_POSTGRES_* env vars, never via an inline DATABASE_URL.
+
+    PHOENIX_POSTGRES_* is the supported configuration; URL composition
+    inside Compose breaks for passwords containing '@', ':', '/', '#',
+    or '%'. See Phoenix configuration docs.
+    """
+    parsed = _yaml_load(COMPOSE_FILE.read_text(encoding="utf-8"))
     phoenix_env = parsed["services"]["phoenix"]["environment"]
-    # find the SQL url
-    sql_url = ""
-    for k, v in phoenix_env.items():
-        if k == "PHOENIX_SQL_DATABASE_URL":
-            sql_url = v
-    assert sql_url, "Phoenix must set PHOENIX_SQL_DATABASE_URL"
-    # The variable form ${PHOENIX_DB:-phoenix} resolves to 'phoenix';
-    # the default branch in the value string should reference phoenix too.
-    assert "phoenix" in sql_url.lower(), (
-        f"Phoenix URL must point at a phoenix database; got {sql_url!r}"
+    # Must NOT use the URL form.
+    assert "PHOENIX_SQL_DATABASE_URL" not in phoenix_env, (
+        "Phoenix must not compose the DB URL itself; use PHOENIX_POSTGRES_*"
     )
-    # The application database must not be phoenix
+    # Must use the four supported keys.
+    for key in (
+        "PHOENIX_POSTGRES_HOST",
+        "PHOENIX_POSTGRES_PORT",
+        "PHOENIX_POSTGRES_USER",
+        "PHOENIX_POSTGRES_PASSWORD",
+        "PHOENIX_POSTGRES_DB",
+    ):
+        assert key in phoenix_env, f"Phoenix must set {key}"
+    # The Phoenix database must not equal the application database.
     app_db = parsed["services"]["postgres"]["environment"].get("POSTGRES_DB")
     assert app_db, "Application POSTGRES_DB must be set"
-    assert app_db != "phoenix", "Application and Phoenix must not share a database"
+    assert app_db != phoenix_env["PHOENIX_POSTGRES_DB"], (
+        "Application and Phoenix must not share a database"
+    )
 
 
-def test_pg_initdb_creates_separate_phoenix_database() -> None:
+def test_phoenix_enables_prometheus_metrics() -> None:
+    parsed = _yaml_load(COMPOSE_FILE.read_text(encoding="utf-8"))
+    env = parsed["services"]["phoenix"]["environment"]
+    assert env.get("PHOENIX_ENABLE_PROMETHEUS") == "true", (
+        "Phoenix must set PHOENIX_ENABLE_PROMETHEUS=true so the prometheus job can scrape it"
+    )
+    # And its metrics port must be exposed.
+    ports = parsed["services"]["phoenix"].get("ports", []) or []
+    published: set[str] = set()
+    for p in ports:
+        if isinstance(p, str):
+            published.add(p.split(":")[-1].split("/")[0])
+        elif isinstance(p, dict):
+            published.add(str(p.get("published", "")))
+    # Phoenix internal metrics port is 9090; we map it to host 9091 to
+    # avoid collision with the local Prometheus server.
+    assert "9091" in published or "9090" in published, (
+        f"Phoenix metrics port must be exposed; have {published}"
+    )
+
+
+def test_otel_probe_strict_curl_timeouts() -> None:
+    """The otel-probe entrypoint must use strict curl timeouts so a
+    20s budget is actually 20s (not unbounded).
+    """
+    parsed = _yaml_load(COMPOSE_FILE.read_text(encoding="utf-8"))
+    probe = parsed["services"]["otel-probe"]
+    cmd = probe["entrypoint"][-1]
+    assert "--max-time" in cmd, "curl must use --max-time to bound each request"
+    assert "--connect-timeout" in cmd, "curl must use --connect-timeout"
+
+
+def test_prometheus_waits_for_otel_probe() -> None:
+    """Prometheus must depend on otel-probe with
+    service_completed_successfully so it does not start until the
+    collector's health endpoint is actually reachable.
+    """
+    parsed = _yaml_load(COMPOSE_FILE.read_text(encoding="utf-8"))
+    deps = parsed["services"]["prometheus"].get("depends_on") or {}
+    assert isinstance(deps, dict), "prometheus depends_on must be a mapping"
+    assert "otel-probe" in deps, "prometheus must depend on otel-probe"
+    assert deps["otel-probe"].get("condition") == "service_completed_successfully", (
+        "prometheus must wait for otel-probe to complete successfully"
+    )
+
+
+def test_grafana_waits_for_prometheus_healthy() -> None:
+    parsed = _yaml_load(COMPOSE_FILE.read_text(encoding="utf-8"))
+    deps = parsed["services"]["grafana"].get("depends_on") or {}
+    assert isinstance(deps, dict)
+    assert "prometheus" in deps
+    assert deps["prometheus"].get("condition") == "service_healthy", (
+        "grafana must wait for prometheus to become healthy"
+    )
+
+
+def test_prometheus_healthcheck_targets_ready_endpoint() -> None:
+    """Prometheus healthcheck must probe /-/ready, not just --version."""
+    parsed = _yaml_load(COMPOSE_FILE.read_text(encoding="utf-8"))
+    hc = parsed["services"]["prometheus"]["healthcheck"]
+    test = hc.get("test", [])
+    cmd = " ".join(test) if isinstance(test, list) else str(test)
+    assert "-/ready" in cmd, "Prometheus healthcheck must hit /-/ready to prove service is ready"
+    assert "--version" not in cmd, "Prometheus must not use --version as healthcheck"
+
+
+def test_otel_internal_telemetry_bound_to_all_interfaces() -> None:
+    """The collector's self-telemetry exporter must bind 0.0.0.0:8888
+    so the prometheus container can scrape it.
+    """
+    cfg = (ROOT / "deploy" / "docker" / "otel" / "collector-config.yaml").read_text(
+        encoding="utf-8"
+    )
+    parsed = _yaml_load(cfg)
+    telemetry = parsed.get("service", {}).get("telemetry", {}).get("metrics", {})
+    addr = telemetry.get("address", "")
+    assert "0.0.0.0" in addr, f"otel-collector self-telemetry must bind 0.0.0.0:8888; got {addr!r}"
+    assert "8888" in addr
     """The init script must create the Phoenix DB using PHOENIX_DB env.
 
     The script is a .sh (not .sql) so it can interpolate env vars and

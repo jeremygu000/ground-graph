@@ -181,15 +181,20 @@ services:
       - -ec
       - |
         echo "Probing otel-collector health endpoint..."
-        for i in 1 2 3 4 5 6 7 8 9 10; do
-          if curl -fsS http://otel-collector:13133/ >/dev/null; then
-            echo "OK: otel-collector health endpoint reachable"
-            exit 0
+        ok=0
+        for i in $$(seq 1 20); do
+          if curl --connect-timeout 1 --max-time 2 -fsS \
+               http://otel-collector:13133/ >/dev/null 2>&1; then
+            echo "OK: otel-collector health endpoint reachable (attempt $$i)"
+            ok=1
+            break
           fi
-          sleep 2
+          sleep 1
         done
-        echo "FAIL: otel-collector health endpoint unreachable after 20s"
-        exit 1
+        if [ "$$ok" -ne 1 ]; then
+          echo "FAIL: otel-collector health endpoint unreachable after 20s"
+          exit 1
+        fi
     restart: "no"
     networks:
       - groundgraph-net
@@ -201,11 +206,24 @@ services:
     image: arizephoenix/phoenix:8.29.1
     <<: [*restart, *logging]
     environment:
-      PHOENIX_SQL_DATABASE_URL: postgresql://${POSTGRES_USER:-groundgraph}:${POSTGRES_PASSWORD:-change-me-local-only}@postgres:5432/${PHOENIX_DB:-phoenix}
+      # Phoenix accepts separate PHOENIX_POSTGRES_* env vars which
+      # avoid URL-encoding pitfalls when the password contains
+      # '@', ':', '/', '#', or '%'. See Phoenix configuration docs.
+      PHOENIX_POSTGRES_HOST: postgres
+      PHOENIX_POSTGRES_PORT: "5432"
+      PHOENIX_POSTGRES_USER: ${POSTGRES_USER:-groundgraph}
+      PHOENIX_POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-local-only}
+      PHOENIX_POSTGRES_DB: ${PHOENIX_DB:-phoenix}
       PHOENIX_ENABLE_AUTH: "false"
       PHOENIX_GRPC_PORT: "4317"
+      # M1.2: enable Phoenix's built-in Prometheus metrics endpoint
+      PHOENIX_ENABLE_PROMETHEUS: "true"
     ports:
       - "127.0.0.1:6006:6006"
+      # Phoenix Prometheus metrics: bind to a different host port to
+      # avoid colliding with the local Prometheus server. The container
+      # still listens on its default 9090.
+      - "127.0.0.1:9091:9090"   # Phoenix Prometheus metrics (M1.2)
     depends_on:
       postgres:
         condition: service_healthy
@@ -239,16 +257,15 @@ services:
     ports:
       - "127.0.0.1:9090:9090"
     depends_on:
-      otel-collector:
-        condition: service_started
+      otel-probe:
+        condition: service_completed_successfully
     healthcheck:
       test:
-        - CMD
-        - /bin/prometheus
-        - --version
-      interval: 30s
+        - CMD-SHELL
+        - wget -qO- http://localhost:9090/-/ready >/dev/null 2>&1 || exit 1
+      interval: 15s
       timeout: 5s
-      retries: 3
+      retries: 5
       start_period: 20s
     networks:
       - groundgraph-net
@@ -271,7 +288,7 @@ services:
       - "127.0.0.1:3000:3000"
     depends_on:
       prometheus:
-        condition: service_started
+        condition: service_healthy
     healthcheck:
       test:
         - CMD-SHELL

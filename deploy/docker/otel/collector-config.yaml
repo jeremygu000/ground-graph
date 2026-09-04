@@ -35,6 +35,13 @@ extensions:
 
 service:
   extensions: [health_check, pprof]
+  # Bind the internal Prometheus reader on 0.0.0.0 so the prometheus
+  # container can scrape otelcol_* self-telemetry. Without this, the
+  # default 127.0.0.1:8888 listener is unreachable cross-container.
+  telemetry:
+    metrics:
+      address: 0.0.0.0:8888
+      level: basic
   pipelines:
     traces:
       receivers: [otlp]
