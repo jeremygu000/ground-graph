@@ -84,10 +84,10 @@
       "type": "timeseries",
       "title": "Request rate (req/s) — groundgraph application",
       "gridPos": { "h": 8, "w": 8, "x": 0, "y": 20 },
-      "description": "Incoming request rate from Starlette metrics. Requires app to be running for >= 60s for first data to appear (OTel export interval).",
+      "description": "Incoming request rate from groundgraph.http.requests counter. Requires app to be running for >= 60s for first data to appear (OTel export interval).",
       "targets": [
         {
-          "expr": "rate(starlette_requests_processing_time_seconds_summary_count{job=\"groundgraph-application\"}[5m])",
+          "expr": "sum(rate(groundgraph_http_requests_total{job=\"groundgraph-application\"}[5m]))",
           "legendFormat": "req/s",
           "refId": "A"
         }
@@ -97,10 +97,10 @@
       "type": "timeseries",
       "title": "Error rate (5xx / total) — groundgraph application",
       "gridPos": { "h": 8, "w": 8, "x": 8, "y": 20 },
-      "description": "Proportion of requests returning 5xx status codes. Requires app to be running for >= 60s for first data.",
+      "description": "Proportion of requests returning 5xx status codes from groundgraph.http.request.errors counter. Requires app to be running for >= 60s for first data.",
       "targets": [
         {
-          "expr": "rate(starlette_requests_processing_time_seconds_summary_count{job=\"groundgraph-application\", status_code=~\"5..\"}[5m]) / rate(starlette_requests_processing_time_seconds_summary_count{job=\"groundgraph-application\"}[5m])",
+          "expr": "sum(rate(groundgraph_http_request_errors_total{job=\"groundgraph-application\"}[5m])) / sum(rate(groundgraph_http_requests_total{job=\"groundgraph-application\"}[5m]))",
           "legendFormat": "5xx error rate",
           "refId": "A"
         }
@@ -110,20 +110,20 @@
       "type": "timeseries",
       "title": "Latency p50 / p95 / p99 (seconds) — groundgraph application",
       "gridPos": { "h": 8, "w": 8, "x": 16, "y": 20 },
-      "description": "Request processing latency quantiles from Starlette summary. Requires app to be running for >= 60s. Note: Starlette provides summary quantiles; use custom histogram for precise percentile bucketing.",
+      "description": "Request latency quantiles from groundgraph.http.request.duration histogram. Requires app to be running for >= 60s. Uses histogram_quantile() with bucket aggregation.",
       "targets": [
         {
-          "expr": "starlette_requests_processing_time_seconds_summary{job=\"groundgraph-application\", quantile=\"0.5\"}",
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(groundgraph_http_request_duration_seconds_bucket{job=\"groundgraph-application\"}[5m])))",
           "legendFormat": "p50",
           "refId": "A"
         },
         {
-          "expr": "starlette_requests_processing_time_seconds_summary{job=\"groundgraph-application\", quantile=\"0.95\"}",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(groundgraph_http_request_duration_seconds_bucket{job=\"groundgraph-application\"}[5m])))",
           "legendFormat": "p95",
           "refId": "B"
         },
         {
-          "expr": "starlette_requests_processing_time_seconds_summary{job=\"groundgraph-application\", quantile=\"0.99\"}",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(groundgraph_http_request_duration_seconds_bucket{job=\"groundgraph-application\"}[5m])))",
           "legendFormat": "p99",
           "refId": "C"
         }

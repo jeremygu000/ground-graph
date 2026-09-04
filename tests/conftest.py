@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
 import subprocess
 import time
 from collections.abc import AsyncGenerator, Generator
@@ -30,6 +31,16 @@ EXPECTED_SERVICES = frozenset(
         "neo4j",
         "minio",
         "otel-collector",
+        "phoenix",
+        "prometheus",
+        "grafana",
+    }
+)
+SERVICES_WITH_HEALTHCHECK = frozenset(
+    {
+        "postgres",
+        "neo4j",
+        "minio",
         "phoenix",
         "prometheus",
         "grafana",
@@ -90,6 +101,13 @@ def _compose_services() -> list[dict[str, Any]]:
 
 
 def _wait_for_stack_healthy(timeout: int = 180) -> StackServices:
+    """Wait until all expected services are running and healthy.
+
+    For services that declare a container healthcheck, both
+    ``State == running`` and ``Health == healthy`` are required. For
+    services without a healthcheck (e.g. otel-collector), only
+    ``State == running`` is required.
+    """
     deadline = time.monotonic() + timeout
     last_error: str | None = None
 
@@ -110,14 +128,15 @@ def _wait_for_stack_healthy(timeout: int = 180) -> StackServices:
             name = svc.get("Service", "")
             if name not in EXPECTED_SERVICES:
                 continue
-            health = svc.get("Health", "")
             svc_state = svc.get("State", "")
             if svc_state != "running":
                 all_healthy = False
                 break
-            if health == "unhealthy":
-                all_healthy = False
-                break
+            if name in SERVICES_WITH_HEALTHCHECK:
+                health = svc.get("Health", "")
+                if health != "healthy":
+                    all_healthy = False
+                    break
 
         if all_healthy:
             break
@@ -141,22 +160,36 @@ def _wait_for_stack_healthy(timeout: int = 180) -> StackServices:
 
 @pytest.fixture(scope="session")
 def docker_stack() -> Generator[StackServices, None, None]:
-    """Start docker-compose stack and yield connection info; tear down on exit."""
+    """Start docker-compose stack and yield connection info; tear down on exit.
+
+    Skip policy:
+      * Docker CLI binary missing → skip
+      * Docker daemon unreachable → skip
+    Fail policy:
+      * ``docker compose up`` returns non-zero → fail
+    """
+    if shutil.which("docker") is None:
+        pytest.skip("Docker CLI is not available on PATH.")
+
+    docker_info = subprocess.run(
+        ["docker", "info"],
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    if docker_info.returncode != 0:
+        pytest.skip(
+            f"Docker daemon is not reachable:\n"
+            f"stdout: {docker_info.stdout}\n"
+            f"stderr: {docker_info.stderr}"
+        )
+
     compose_up = _run_compose(["up", "-d"], timeout=120)
     if compose_up.returncode != 0:
-        stderr = compose_up.stderr.lower()
-        if "not found" in stderr or "no such file" in stderr or "docker" not in stderr:
-            pytest.skip(
-                f"Docker CLI is not available on this system:\n"
-                f"stdout: {compose_up.stdout}\n"
-                f"stderr: {compose_up.stderr}"
-            )
-        else:
-            pytest.fail(
-                f"docker compose up failed:\n"
-                f"stdout: {compose_up.stdout}\n"
-                f"stderr: {compose_up.stderr}"
-            )
+        pytest.fail(
+            f"docker compose up failed:\nstdout: {compose_up.stdout}\nstderr: {compose_up.stderr}"
+        )
 
     try:
         services = _wait_for_stack_healthy(timeout=180)
@@ -198,6 +231,11 @@ async def app_process(docker_stack: StackServices) -> AsyncGenerator[list[str], 
         ),
         "TELEMETRY_CAPTURE_CONTENT": "false",
         "AUTH_MODE": "local",
+        # Integration tests wait for metrics to flow app → collector →
+        # Prometheus. The production default is 60s; the test fixture
+        # overrides it to 5s so the test_app_metrics_reach_prometheus
+        # integration test finishes in seconds rather than minutes.
+        "OTEL_METRIC_EXPORT_INTERVAL_MS": "5000",
     }
 
     cwd = os.getcwd()
@@ -223,6 +261,8 @@ async def app_process(docker_stack: StackServices) -> AsyncGenerator[list[str], 
     if not ready:
         read_task.cancel()
         proc.terminate()
+        with suppress(asyncio.CancelledError):
+            await read_task
         await proc.wait()
         raise RuntimeError("FastAPI app did not become ready within 45s.")
 
@@ -230,11 +270,8 @@ async def app_process(docker_stack: StackServices) -> AsyncGenerator[list[str], 
         yield []
     finally:
         read_task.cancel()
-        with suppress(Exception):
-            if proc.stdout is not None:
-                await proc.stdout.aclose()
-        with suppress(Exception):
-            proc.kill()
-        await asyncio.sleep(0.1)
+        with suppress(asyncio.CancelledError):
+            await read_task
+        proc.terminate()
         with suppress(Exception):
             await proc.wait()

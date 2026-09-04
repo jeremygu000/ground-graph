@@ -118,6 +118,7 @@ def test_settings_typed_properties() -> None:
     assert settings.is_test is False
 
 
-def test_settings_openai_key_value_empty_by_default() -> None:
-    settings = Settings.model_construct()
+def test_settings_openai_key_value_empty_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    settings = Settings(_env_file=None)  # type: ignore[reportCallIssue]
     assert settings.openai_api_key_value == ""

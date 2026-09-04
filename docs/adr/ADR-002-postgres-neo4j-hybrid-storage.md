@@ -35,7 +35,7 @@ PostgreSQL is the source of truth for document ingestion status and run state. N
 
 ## Alternatives considered
 
-- **Single Neo4j with APOC for vectors**: Neo4j has vector search (晚8+), but it is not the primary use case; pgvector is more mature and better integrated with PostgreSQL for hybrid SQL+vector queries.
+- **Single Neo4j with APOC for vectors**: Neo4j 5.11+ has native vector search, but it is not the primary use case; pgvector is more mature and better integrated with PostgreSQL for hybrid SQL+vector queries.
 - **Single PostgreSQL with Neo4j foreign data wrapper**: FDW support for Neo4j is immature; Cypher queries over FDW lose expressiveness.
 - **Separate vector store (Pinecone, Weaviate, Qdrant)**: Adds a third infrastructure dependency; pgvector is sufficient for the expected dataset scale.
 - **Neo4j for everything (including documents)**: Neo4j is not designed for high-volume document/chunk storage or ACID run-state tracking.

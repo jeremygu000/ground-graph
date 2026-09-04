@@ -77,6 +77,12 @@ class Settings(BaseSettings):
     otel_exporter_otlp_insecure: bool = True
     phoenix_collector_endpoint: str = "http://localhost:6006"
     phoenix_project_name: str = "groundgraph"
+    # How often the SDK's PeriodicExportingMetricReader pushes a batch
+    # of metrics to the OTel collector. 60_000 ms (1 min) is the
+    # production default — high enough to keep the export overhead
+    # negligible. Integration tests override this via
+    # ``OTEL_METRIC_EXPORT_INTERVAL_MS`` to keep the suite fast.
+    otel_metric_export_interval_ms: int = 60_000
 
     prometheus_port: int = 9464
 

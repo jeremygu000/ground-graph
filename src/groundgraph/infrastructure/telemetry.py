@@ -144,6 +144,7 @@ def configure_meter_provider(
     metric_reader: MetricReader | None = None,
     enable_otlp: bool = True,
     otlp_insecure: bool = False,
+    export_interval_millis: int = 60_000,
 ) -> MeterProvider:
     """Create an app-local meter provider with optional OTLP export.
 
@@ -156,7 +157,9 @@ def configure_meter_provider(
         provider = MeterProvider(resource=resource, metric_readers=[metric_reader])
     elif enable_otlp and otlp_endpoint:
         metric_exporter = OTLPMetricExporter(endpoint=otlp_endpoint, insecure=otlp_insecure)
-        reader = PeriodicExportingMetricReader(metric_exporter, export_interval_millis=60_000)
+        reader = PeriodicExportingMetricReader(
+            metric_exporter, export_interval_millis=export_interval_millis
+        )
         provider = MeterProvider(resource=resource, metric_readers=[reader])
     else:
         provider = MeterProvider(resource=resource)

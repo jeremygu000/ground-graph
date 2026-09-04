@@ -82,9 +82,10 @@ def test_production_rejects_trusted_headers() -> None:
         Settings(**kwargs)
 
 
-def test_development_allows_default_secrets() -> None:
+def test_development_allows_default_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
     """The default development config must remain easy to run locally."""
-    settings = Settings.model_construct()
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    settings = Settings(_env_file=None)  # type: ignore[reportCallIssue]
     assert settings.is_production is False
     assert settings.openai_api_key_value == ""
 

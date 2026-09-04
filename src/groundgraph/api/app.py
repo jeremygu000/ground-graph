@@ -145,6 +145,7 @@ def create_app(  # noqa: PLR0915 - composition root keeps app lifecycle wiring t
         metric_reader=metric_reader,
         enable_otlp=tracing_enabled,
         otlp_insecure=settings.otel_exporter_otlp_insecure,
+        export_interval_millis=settings.otel_metric_export_interval_ms,
     )
 
     if app_metrics is None:
