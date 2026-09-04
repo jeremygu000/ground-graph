@@ -105,22 +105,37 @@ def test_makefile_check_does_not_modify_workspace() -> None:
 
 def test_settings_module_renamed() -> None:
     """No leftover references to the old package namespace in runtime code."""
-    result = subprocess.run(
-        [
-            "grep",
-            "-rln",
-            r"\bgraphrag\.",
-            "src",
-            "apps",
-            "--include=*.py",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    # grep returns 1 when no match — that's success here.
-    if result.returncode == 0 and result.stdout.strip():
-        pytest.fail("Found references to the old package namespace:\n" + result.stdout)
+    offenders = []
+    for path in (ROOT / "src").rglob("*.py"):
+        if "graphrag." in path.read_text(encoding="utf-8"):
+            offenders.append(str(path))
+    assert not offenders, f"Found references to the old package namespace: {offenders}"
+
+
+def test_authoritative_roots_do_not_reference_old_namespace() -> None:
+    """Scan authoritative docs + runtime roots for stale package names."""
+    roots = [
+        ROOT / "src",
+        ROOT / "docs",
+        ROOT / "AGENTS.md",
+        ROOT / "README.md",
+        ROOT / "CONTRIBUTING.md",
+    ]
+    offenders: list[str] = []
+    for root in roots:
+        if not root.exists():
+            continue
+        if root.is_file():
+            text = root.read_text(encoding="utf-8")
+            if "src/graphrag" in text or "agentic-graphrag" in text:
+                offenders.append(str(root))
+            continue
+        for path in root.rglob("*"):
+            if path.is_file() and path.suffix in {".py", ".md", ".yaml", ".yml", ".toml"}:
+                text = path.read_text(encoding="utf-8")
+                if "src/graphrag" in text or "agentic-graphrag" in text:
+                    offenders.append(str(path))
+    assert not offenders, f"Found stale namespace references in: {offenders}"
 
 
 def test_pyproject_hatch_package_is_groundgraph() -> None:

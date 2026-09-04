@@ -82,3 +82,4 @@ phoenix/
 .pyrightconfig.json.bak
 docs/agentic-graphrag-integrating-graphs-enterprise-ai.epub
 docs/obsidian/
+docs/practical-llm-evaluation-production-systems.pdf
