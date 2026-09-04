@@ -7,7 +7,7 @@ import os
 import pytest
 from pydantic import SecretStr
 
-from graphrag.application.settings import Settings, get_settings, reset_settings_cache
+from groundgraph.application.settings import Settings, get_settings, reset_settings_cache
 
 
 @pytest.fixture(autouse=True)

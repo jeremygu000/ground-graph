@@ -62,8 +62,77 @@ def test_pyright_targets_domain_and_application_strictly() -> None:
     match = re.search(r"\[tool\.pyright\](.*?)(?=\n\[)", text, re.DOTALL)
     assert match, "[tool.pyright] block not found"
     block = match.group(1)
-    assert "src/graphrag/domain" in block
-    assert "src/graphrag/application" in block
+    assert "src/groundgraph/domain" in block
+    assert "src/groundgraph/application" in block
+
+
+def test_coverage_gate_is_enforced() -> None:
+    text = _read(PYPROJECT)
+    match = re.search(r"\[tool\.coverage\.report\](.*?)(?=\n\[)", text, re.DOTALL)
+    assert match, "[tool.coverage.report] block not found"
+    block = match.group(1)
+    assert "fail_under" in block, "coverage must enforce a fail_under threshold"
+    # Extract the numeric value
+    val_match = re.search(r"fail_under\s*=\s*(\d+)", block)
+    assert val_match
+    val = int(val_match.group(1))
+    assert 70 <= val <= 95, (
+        f"coverage fail_under {val} is outside the expected 70-95 band; "
+        "plan.md section 14.3 sets the initial gate at 85%"
+    )
+
+
+def test_makefile_check_does_not_modify_workspace() -> None:
+    """`make check` must use ruff format --check, not the writing form.
+
+    `make format` may rewrite files; `make check` must be read-only so it
+    is safe to run in CI and as a pre-push gate.
+    """
+    text = _read(MAKEFILE)
+    match = re.search(r"^check:\s*([^\n]+)", text, re.MULTILINE)
+    assert match
+    deps = match.group(1)
+    # Must include the read-only formatter target.
+    assert "format-check" in deps, (
+        "`make check` must depend on format-check, not on `format` (which writes)"
+    )
+    # The bare `format` target must not be a direct dependency of `check`.
+    tokens = re.split(r"[\s]+", deps.strip())
+    assert "format" not in tokens, (
+        f"`make check` must not depend on the writing `format` target; got tokens {tokens}"
+    )
+
+
+def test_settings_module_renamed() -> None:
+    """No leftover references to the old package namespace in source/apps."""
+    result = subprocess.run(
+        [
+            "grep",
+            "-rln",
+            r"\bgraphrag\.",
+            "src",
+            "apps",
+            "--include=*.py",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    # grep returns 1 when no match — that's success here.
+    if result.returncode == 0 and result.stdout.strip():
+        pytest.fail("Found references to the old package namespace:\n" + result.stdout)
+
+
+def test_pyproject_hatch_package_is_groundgraph() -> None:
+    text = _read(PYPROJECT)
+    assert 'packages = ["src/groundgraph"]' in text, (
+        "hatch build target must point at src/groundgraph"
+    )
+
+
+def test_precommit_dependency_is_declared() -> None:
+    text = _read(PYPROJECT)
+    assert "pre-commit" in text, "pre-commit must be in dev dependencies"
 
 
 def test_makefile_exposes_required_targets() -> None:

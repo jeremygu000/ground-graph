@@ -50,6 +50,7 @@ dev = [
     "deepeval>=2.0.0",
     "respx>=0.21.0",
     "mypy>=1.13.0",
+    "pre-commit>=4.0.0",
 ]
 ingestion = [
     "markdown-it-py>=3.0.0",
@@ -67,12 +68,12 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/graphrag"]
+packages = ["src/groundgraph"]
 
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-src = ["src", "tests"]
+src = ["src", "tests", "apps"]
 
 [tool.ruff.lint]
 select = [
@@ -117,24 +118,30 @@ filterwarnings = [
 ]
 
 [tool.coverage.run]
-source = ["src/graphrag"]
+source = ["src/groundgraph"]
 branch = true
 omit = [
-    "src/graphrag/infrastructure/*",
-    "src/graphrag/api/*",
-    "src/graphrag/workflows/*",
+    "*/infrastructure/*",
+    "*/api/*",
+    "*/workflows/*",
 ]
 
 [tool.coverage.report]
 precision = 2
 show_missing = true
 skip_covered = false
+fail_under = 85
 exclude_lines = [
     "pragma: no cover",
     "raise NotImplementedError",
     "if TYPE_CHECKING:",
     "if __name__ == .__main__.:",
     "\\.\\.\\.",
+]
+exclude_also = [
+    "src/groundgraph/infrastructure/.*",
+    "src/groundgraph/api/.*",
+    "src/groundgraph/workflows/.*",
 ]
 
 [tool.pyright]
@@ -158,12 +165,12 @@ reportUnknownLambdaType = "warning"
 reportMissingTypeArgument = "warning"
 reportAttributeAccessIssue = "warning"
 useLibraryCodeForTypes = true
-strict = ["src/graphrag/domain", "src/graphrag/application"]
+strict = ["src/groundgraph/domain", "src/groundgraph/application"]
 
 [tool.mypy]
 python_version = "3.12"
 mypy_path = "src"
-files = ["src/graphrag/domain", "src/graphrag/application"]
+files = ["src/groundgraph/domain", "src/groundgraph/application"]
 strict = true
 warn_unused_ignores = true
 warn_return_any = true

@@ -187,7 +187,7 @@ M0 → M1 → M2 → M3 → M4 → M5 → M6 → M7 → M8 → M9 → M10 → M1
 
 ## 15. 当前进度
 
-- [ ] M0 — Repository and engineering baseline
+- [x] M0 — Repository and engineering baseline
 - [ ] M1 — Local infrastructure and telemetry foundation
 - [ ] M2 — Domain contracts and persistence model
 - [ ] M3 — Document ingestion and versioning

@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TypeVar
 
-from graphrag.application.errors import ErrorCode, GraphRAGError
+from groundgraph.application.errors import ErrorCode, GraphRAGError
 
 T = TypeVar("T")
 E = TypeVar("E", bound=GraphRAGError)

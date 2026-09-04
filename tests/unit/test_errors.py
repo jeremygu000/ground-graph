@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from graphrag.application.errors import (
+from groundgraph.application.errors import (
     AuthorizationLeakError,
     ConfigurationError,
     ConflictError,
@@ -22,7 +22,7 @@ from graphrag.application.errors import (
     UpstreamUnavailableError,
     ValidationError,
 )
-from graphrag.application.result import Err, Ok
+from groundgraph.application.result import Err, Ok
 
 
 @pytest.mark.parametrize(

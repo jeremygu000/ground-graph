@@ -17,11 +17,11 @@ import pytest
 @pytest.mark.parametrize(
     "module_name",
     [
-        "graphrag.domain",
-        "graphrag.application",
-        "graphrag.application.settings",
-        "graphrag.application.errors",
-        "graphrag.application.result",
+        "groundgraph.domain",
+        "groundgraph.application",
+        "groundgraph.application.settings",
+        "groundgraph.application.errors",
+        "groundgraph.application.result",
     ],
 )
 def test_module_imports(module_name: str) -> None:
@@ -32,13 +32,13 @@ def test_domain_package_does_not_import_frameworks() -> None:
     """The domain package must not import any framework library.
 
     Runs in a fresh subprocess so we can observe which modules are
-    pulled in as a side effect of ``import graphrag.domain`` without
+    pulled in as a side effect of ``import groundgraph.domain`` without
     inheriting modules already loaded by other tests in this session.
     """
     snippet = textwrap.dedent(
         """
         import sys
-        import graphrag.domain  # noqa: F401
+        import groundgraph.domain  # noqa: F401
         forbidden = {
             "fastapi", "uvicorn", "langgraph", "langchain", "openai",
             "neo4j", "sqlalchemy", "alembic", "asyncpg", "psycopg",

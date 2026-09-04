@@ -10,7 +10,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     )
 
     app_env: Literal["development", "test", "staging", "production"] = "development"
-    app_name: str = "agentic-graphrag"
+    app_name: str = "groundgraph"
     app_version: str = "0.1.0"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     log_format: Literal["json", "console"] = "json"
@@ -42,8 +42,8 @@ class Settings(BaseSettings):
 
     postgres_host: str = "localhost"
     postgres_port: int = 5432
-    postgres_db: str = "graphrag"
-    postgres_user: str = "graphrag"
+    postgres_db: str = "groundgraph"
+    postgres_user: str = "groundgraph"
     postgres_password: SecretStr = Field(default=SecretStr("change-me-local-only"))
     postgres_pool_size: int = 10
     postgres_max_overflow: int = 20
@@ -57,8 +57,8 @@ class Settings(BaseSettings):
     s3_endpoint_url: str = "http://localhost:9000"
     s3_access_key: str = "change-me-local-only"
     s3_secret_key: SecretStr = Field(default=SecretStr("change-me-local-only"))
-    s3_bucket_raw: str = "graphrag-raw"
-    s3_bucket_processed: str = "graphrag-processed"
+    s3_bucket_raw: str = "groundgraph-raw"
+    s3_bucket_processed: str = "groundgraph-processed"
     s3_region: str = "us-east-1"
     s3_use_ssl: bool = False
 
@@ -72,11 +72,11 @@ class Settings(BaseSettings):
     planner_model: str = "gpt-4o-mini"
     judge_model: str = "gpt-4o-mini"
 
-    otel_service_name: str = "agentic-graphrag"
+    otel_service_name: str = "groundgraph"
     otel_exporter_otlp_endpoint: str = "http://localhost:4317"
     otel_exporter_otlp_insecure: bool = True
     phoenix_collector_endpoint: str = "http://localhost:6006"
-    phoenix_project_name: str = "agentic-graphrag"
+    phoenix_project_name: str = "groundgraph"
 
     prometheus_port: int = 9464
 
@@ -117,6 +117,67 @@ class Settings(BaseSettings):
         if not 0.0 <= v <= 1.0:
             raise ValueError("telemetry_sample_rate must be between 0 and 1")
         return v
+
+    @field_validator("app_env", mode="after")
+    @classmethod
+    def _validate_production_fail_closed(cls, v: str) -> str:
+        """Reject obvious production misconfigurations early.
+
+        Refuses to construct Settings in production when:
+          - the OpenAI API key is empty or the dev placeholder;
+          - the postgres password is the dev placeholder;
+          - OTLP transport is insecure (``OTEL_EXPORTER_OTLP_INSECURE=true``).
+
+        Run with APP_ENV=development or APP_ENV=test to bypass these
+        checks locally. This is a defense-in-depth measure: production
+        secrets MUST still come from a secret manager and never from
+        a checked-in ``.env`` file.
+        """
+        if v != "production":
+            return v
+        # We re-construct minimal context for validation. Pydantic v2
+        # validators receive only the field value here, so we raise
+        # generic messages; the deeper checks happen in model_validator.
+        return v
+
+    @model_validator(mode="after")
+    def _production_fail_closed(self) -> Settings:
+        """Cross-field validation: fail-closed in production.
+
+        See ``_validate_production_fail_closed`` for the rationale.
+        """
+        if self.app_env != "production":
+            return self
+
+        problems: list[str] = []
+
+        if not self.openai_api_key_value:
+            problems.append("OPENAI_API_KEY is empty in production")
+
+        placeholder_secrets = {
+            self.postgres_password.get_secret_value(),
+            self.neo4j_password.get_secret_value(),
+            self.s3_secret_key.get_secret_value(),
+        }
+        if any(v == "change-me-local-only" for v in placeholder_secrets):
+            problems.append("a default placeholder secret is still in use")
+
+        if self.otel_exporter_otlp_insecure:
+            problems.append("OTEL_EXPORTER_OTLP_INSECURE=true in production")
+
+        if self.auth_mode == "local":
+            problems.append("AUTH_MODE=local in production")
+
+        if self.auth_trusted_headers:
+            problems.append(
+                "AUTH_TRUSTED_HEADERS=true in production: principals are "
+                "sourced from headers and must be set by a trusted proxy"
+            )
+
+        if problems:
+            msg = "Production configuration is unsafe: " + "; ".join(problems)
+            raise ValueError(msg)
+        return self
 
     @property
     def cors_origins_list(self) -> list[str]:

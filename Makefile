@@ -15,18 +15,22 @@ help: ## Show this help
 .PHONY: setup
 setup: ## Install dependencies and pre-commit
 	uv sync --all-extras
-	uv run pre-commit install || true
+	uv run pre-commit install
 
 .PHONY: install
 install: ## Install runtime dependencies only
 	uv sync
 
 .PHONY: format
-format: ## Run ruff formatter
+format: ## Run ruff formatter (modifies workspace)
 	uv run ruff format .
 
+.PHONY: format-check
+format-check: ## Run ruff formatter in check mode (CI / pre-push)
+	uv run ruff format --check .
+
 .PHONY: lint
-lint: ## Run ruff linter
+lint: ## Run ruff linter (auto-fix)
 	uv run ruff check . --fix
 
 .PHONY: lint-check
@@ -60,14 +64,14 @@ test-all: ## Run all tests including integration
 
 .PHONY: test-cov
 test-cov: ## Run unit tests with coverage
-	uv run pytest -q -m "not integration and not e2e" --cov=src/graphrag --cov-report=term-missing
+	uv run pytest -q -m "not integration and not e2e" --cov=src/groundgraph --cov-report=term-missing
 
 .PHONY: eval-smoke
 eval-smoke: ## Run evaluation smoke tests
-	uv run python -m graphrag.application.evaluation.smoke
+	uv run python -m groundgraph.application.evaluation.smoke
 
 .PHONY: check
-check: format lint-check typecheck test ## Run all quality gates
+check: format-check lint-check typecheck test ## Run all quality gates (read-only)
 
 .PHONY: fix
 fix: ## Auto-fix what we can (format + lint --fix), then re-check
@@ -76,7 +80,7 @@ fix: ## Auto-fix what we can (format + lint --fix), then re-check
 	$(MAKE) check
 
 .PHONY: ci
-ci: lint-check typecheck test ## CI pipeline (no format)
+ci: format-check lint-check typecheck test ## CI pipeline (read-only)
 
 .PHONY: clean
 clean: ## Remove caches and build artifacts
