@@ -75,6 +75,8 @@ deploy/docker/volumes/
 
 # Agent skills
 .agents/
+.claude/
+skills-lock.json
 
 # Telemetry
 telemetry/
