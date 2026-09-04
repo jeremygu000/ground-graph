@@ -51,12 +51,24 @@ mypy: ## Run mypy on domain + application (strict)
 	uv run mypy
 
 .PHONY: test
-test: ## Run unit tests
+test: ## Run unit tests (no Docker required)
 	uv run pytest -q -m "not integration and not e2e"
 
 .PHONY: test-integration
-test-integration: ## Run integration tests (requires Docker)
+test-integration: ## Run ALL integration tests (component + stack + fault)
 	uv run pytest -q -m "integration"
+
+.PHONY: test-component
+test-component: ## Run Testcontainers component tests (Postgres/Neo4j in isolation)
+	uv run pytest -q -m "integration and component"
+
+.PHONY: test-stack
+test-stack: ## Run docker-compose full-stack smoke tests
+	uv run pytest -q -m "integration and stack"
+
+.PHONY: test-fault
+test-fault: ## Run fault-injection integration tests (stop/break a dependency)
+	uv run pytest -q -m "integration and fault"
 
 .PHONY: test-all
 test-all: ## Run all tests including integration

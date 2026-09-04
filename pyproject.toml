@@ -43,7 +43,7 @@ dev = [
     "pytest>=8.3.3",
     "pytest-asyncio>=0.24.0",
     "pytest-cov>=6.0.0",
-    "testcontainers[postgres,neo4j,minio]>=4.8.0",
+    "testcontainers[postgres,neo4j]==4.15.0",
     "ruff>=0.7.0",
     "pyright>=1.1.380",
     "deepeval>=2.0.0",
@@ -104,7 +104,10 @@ addopts = [
     "--tb=short",
 ]
 markers = [
-    "integration: marks tests as integration (requires Docker)",
+    "integration: marks tests as integration (requires Docker; sub-marker below)",
+    "component: component-level integration via Testcontainers (Postgres/Neo4j, requires Docker)",
+    "stack: full docker-compose stack smoke test (requires docker compose up)",
+    "fault: fault-injection test (stops/breaks a dependency mid-test; runs in isolation)",
     "contract: marks tests as contract tests",
     "e2e: marks tests as end-to-end",
     "adversarial: marks tests as adversarial",

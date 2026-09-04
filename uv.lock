@@ -1085,7 +1085,7 @@ dev = [
     { name = "pytest-cov" },
     { name = "respx" },
     { name = "ruff" },
-    { name = "testcontainers", extra = ["minio", "neo4j"] },
+    { name = "testcontainers", extra = ["neo4j"] },
 ]
 ingestion = [
     { name = "beautifulsoup4" },
@@ -1143,7 +1143,7 @@ requires-dist = [
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.36" },
     { name = "structlog", specifier = ">=24.4.0" },
     { name = "tenacity", specifier = ">=9.0.0" },
-    { name = "testcontainers", extras = ["postgres", "neo4j", "minio"], marker = "extra == 'dev'", specifier = ">=4.8.0" },
+    { name = "testcontainers", extras = ["postgres", "neo4j"], marker = "extra == 'dev'", specifier = "==4.15.0" },
     { name = "tree-sitter", marker = "extra == 'ingestion'", specifier = ">=0.23.0" },
     { name = "tree-sitter-python", marker = "extra == 'ingestion'", specifier = ">=0.23.0" },
     { name = "tree-sitter-typescript", marker = "extra == 'ingestion'", specifier = ">=0.23.0" },
@@ -3273,9 +3273,6 @@ wheels = [
 ]
 
 [package.optional-dependencies]
-minio = [
-    { name = "minio" },
-]
 neo4j = [
     { name = "neo4j" },
 ]

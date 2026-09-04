@@ -44,6 +44,7 @@ Update `[ ]` to `[x]` only after the milestone acceptance criteria and validatio
 
 - [x] M0 — Repository and engineering baseline
 - [x] M1 — Local infrastructure and telemetry foundation
+- [x] M2.0 — Containerized component test foundation (Testcontainers for Postgres/pgvector + Neo4j; stack smoke retained)
 - [ ] M2 — Domain contracts and persistence model
 - [ ] M3 — Document ingestion and versioning
 - [ ] M4 — Vector RAG baseline

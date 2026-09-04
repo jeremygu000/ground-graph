@@ -20,7 +20,7 @@ from typing import Any
 import httpx
 import pytest
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.stack]
 
 OTEL_EXPORT_INTERVAL_SEC = 60.0
 PROMETHEUS_SCRAPE_INTERVAL_SEC = 15.0
