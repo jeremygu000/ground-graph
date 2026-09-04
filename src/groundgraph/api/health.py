@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import MutableMapping
 
 from fastapi import APIRouter, Request, Response
-from opentelemetry.metrics import Observation
+from opentelemetry.metrics import Meter, Observation
 from pydantic import BaseModel, Field
 
 from groundgraph.application.health import (
@@ -36,7 +36,7 @@ async def live() -> HealthResponse:
 
 
 def _init_readiness_gauge(
-    meter: object,
+    meter: Meter,
     state: MutableMapping[str, int],
 ) -> None:
     def callback(_options: object) -> list[Observation]:
@@ -58,9 +58,10 @@ async def ready(
     meter = getattr(request.app.state, "meter", None)
 
     if not hasattr(request.app.state, "_readiness_gauge_state"):
-        request.app.state._readiness_gauge_state: dict[str, int] = {}
+        state: dict[str, int] = {}
+        request.app.state._readiness_gauge_state = state
         if meter is not None:
-            _init_readiness_gauge(meter, request.app.state._readiness_gauge_state)
+            _init_readiness_gauge(meter, state)
 
     dependencies = await health_service.check_all()
     state: dict[str, int] = request.app.state._readiness_gauge_state

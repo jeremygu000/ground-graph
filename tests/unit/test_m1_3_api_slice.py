@@ -46,6 +46,11 @@ def _settings() -> Settings:
     )
 
 
+def _make_test_reader() -> InMemoryMetricReader:
+    """Create an in-memory metric reader for hermetic test assertions."""
+    return InMemoryMetricReader()
+
+
 def _make_test_metrics() -> tuple[MeterProvider, InMemoryMetricReader, AppMetrics]:
     """Create an in-memory meter provider with OTel instruments for test assertions."""
     reader = InMemoryMetricReader()
@@ -223,13 +228,13 @@ async def test_in_memory_exporter_records_safe_server_span() -> None:
 @pytest.mark.anyio
 async def test_health_ready_server_span_and_dependency_child_spans_are_linked() -> None:
     exporter = InMemorySpanExporter()
-    _mp, _reader, app_metrics = _make_test_metrics()
+    reader = InMemoryMetricReader()
     app = create_app(
         _settings(),
         health_service=_healthy_service(),
         span_exporter=exporter,
-        telemetry_enabled=True,
-        app_metrics=app_metrics,
+        telemetry_enabled=False,
+        metric_reader=reader,
     )
     response = await _request(app, "/health/ready")
     assert response.status_code == 200
@@ -239,17 +244,23 @@ async def test_health_ready_server_span_and_dependency_child_spans_are_linked() 
         None,
     )
     assert ready_server is not None, f"no ready server span; got {[s.name for s in spans]}"
+    server_ctx = ready_server.context
+    assert server_ctx is not None
     dep_spans = [s for s in spans if s.kind.name == "CLIENT" and s.name.startswith("healthcheck.")]
     assert len(dep_spans) == 3, (
         f"expected 3 dependency spans, got {len(dep_spans)}: {[s.name for s in dep_spans]}"
     )
     for dep in dep_spans:
-        assert dep.context is not None
-        assert dep.context.trace_id == ready_server.context.trace_id
-        assert dep.parent is not None, f"{dep.name} has no parent"
-        assert dep.parent.span_id == ready_server.context.span_id, (
-            f"{dep.name} parent span_id {dep.parent.span_id!r} "
-            f"!= ready_server span_id {ready_server.context.span_id!r}"
+        dep_ctx = dep.context
+        dep_parent = dep.parent
+        assert dep_ctx is not None, f"{dep.name} has no context"
+        assert dep_parent is not None, f"{dep.name} has no parent"
+        assert dep_ctx.trace_id == server_ctx.trace_id, (
+            f"{dep.name} trace_id {dep_ctx.trace_id!r} != server {server_ctx.trace_id!r}"
+        )
+        assert dep_parent.span_id == server_ctx.span_id, (
+            f"{dep.name} parent span_id {dep_parent.span_id!r} "
+            f"!= ready_server span_id {server_ctx.span_id!r}"
         )
 
 
@@ -310,7 +321,7 @@ async def test_request_metrics_are_recorded() -> None:
 
 @pytest.mark.anyio
 async def test_server_error_increments_error_counter_and_request_count() -> None:
-    _mp, _reader, app_metrics = _make_test_metrics()
+    _mp, reader, app_metrics = _make_test_metrics()
     app = create_app(_settings(), health_service=_healthy_service(), app_metrics=app_metrics)
 
     @app.get("/returns-error")
@@ -319,26 +330,76 @@ async def test_server_error_increments_error_counter_and_request_count() -> None
 
     response = await _request(app, "/returns-error")
     assert response.status_code == 500
+    collected = reader.get_metrics_data()
+    assert collected is not None, "expected metrics data after 500 response"
+    rm = collected.resource_metrics[0]
+    sm = rm.scope_metrics[0]
+    metric_map = {m.name: m for m in sm.metrics}
+    req_metric = metric_map.get("groundgraph.http.requests")
+    assert req_metric is not None, (
+        f"request count metric missing; available: {list(metric_map.keys())}"
+    )
+    req_dp = req_metric.data.data_points[0]
+    assert req_dp.value >= 1, f"request count expected >=1, got {req_dp.value}"
+    err_metric = metric_map.get("groundgraph.http.request.errors")
+    assert err_metric is not None, f"error metric missing; available: {list(metric_map.keys())}"
+    err_dp = err_metric.data.data_points[0]
+    assert err_dp.value >= 1, f"error count expected >=1, got {err_dp.value}"
+    dur_metric = metric_map.get("groundgraph.http.request.duration")
+    assert dur_metric is not None, f"duration metric missing; available: {list(metric_map.keys())}"
 
 
 @pytest.mark.anyio
 async def test_health_routes_do_not_contribute_to_request_metrics() -> None:
     _mp, reader, app_metrics = _make_test_metrics()
     app = create_app(_settings(), health_service=_healthy_service(), app_metrics=app_metrics)
+
+    @app.get("/probe/test")
+    async def probe() -> dict[str, str]:
+        return {"ok": "ok"}
+
+    await _request(app, "/probe/test")
     await _request(app, "/health/live")
     await _request(app, "/health/ready")
     collected = reader.get_metrics_data()
-    if collected is not None and collected.resource_metrics:
-        rm = collected.resource_metrics[0]
-        if rm.scope_metrics:
-            sm = rm.scope_metrics[0]
-            request_count_metrics = [m for m in sm.metrics if m.name == "groundgraph.http.requests"]
-            if request_count_metrics:
-                data_points = request_count_metrics[0].data.data_points
-                for dp in data_points:
-                    route_attr = getattr(dp.attributes, "get", lambda k, d=None: d)("route", None)
-                    assert route_attr != "/health/live"
-                    assert route_attr != "/health/ready"
+    assert collected is not None
+    rm = collected.resource_metrics[0]
+    sm = rm.scope_metrics[0]
+    metric_map = {m.name: m for m in sm.metrics}
+    req_metric = metric_map.get("groundgraph.http.requests")
+    assert req_metric is not None
+    for dp in req_metric.data.data_points:
+        route_attr = getattr(dp.attributes, "get", lambda k, d=None: d)("route", None)
+        assert route_attr != "/health/live", "/health/live must not appear in request metrics"
+        assert route_attr != "/health/ready", "/health/ready must not appear in request metrics"
+
+
+@pytest.mark.anyio
+async def test_readiness_gauge_reflects_current_state() -> None:
+    reader = InMemoryMetricReader()
+    app = create_app(
+        _settings(),
+        health_service=_healthy_service(),
+        metric_reader=reader,
+    )
+    await _request(app, "/health/ready")
+    await _request(app, "/health/ready")
+    collected = reader.get_metrics_data()
+    assert collected is not None
+    rm = collected.resource_metrics[0]
+    sm = rm.scope_metrics[0]
+    gauge_metric = next(
+        (m for m in sm.metrics if m.name == "groundgraph.readiness.dependency.healthy"),
+        None,
+    )
+    assert gauge_metric is not None, "readiness gauge metric must exist"
+    dp_by_dep = {
+        getattr(dp.attributes, "get", lambda k, d=None: d)("dependency"): dp.value
+        for dp in gauge_metric.data.data_points
+    }
+    assert dp_by_dep.get("postgres") == 1.0, "postgres should be healthy (1.0)"
+    assert dp_by_dep.get("neo4j") == 1.0, "neo4j should be healthy (1.0)"
+    assert dp_by_dep.get("minio") == 1.0, "minio should be healthy (1.0)"
 
 
 def test_redact_text_replaces_secret_like_terms() -> None:
