@@ -7,7 +7,7 @@ Hybrid Agentic GraphRAG system combining a vertical knowledge graph, a horizonta
 | Milestone | Status |
 |---|---|
 | M0 — Repository and engineering baseline | Complete |
-| M1 — Local infrastructure and telemetry | In review |
+| M1 — Local infrastructure and telemetry | Complete |
 | M2 — Domain contracts and persistence | Pending |
 | M3 — Document ingestion and versioning | Pending |
 | M4 — Vector RAG baseline | Pending |
