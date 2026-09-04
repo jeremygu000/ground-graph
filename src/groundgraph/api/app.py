@@ -8,7 +8,8 @@ from contextlib import asynccontextmanager
 
 import structlog
 from fastapi import FastAPI, Request, Response
-from fastapi.responses import JSONResponse
+from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
+from fastapi.responses import HTMLResponse, JSONResponse
 from opentelemetry import trace
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.sdk.trace.export import SpanExporter
@@ -139,6 +140,20 @@ def create_app(  # noqa: PLR0915 - composition root keeps app lifecycle wiring t
     async def metrics() -> Response:
         """Expose Prometheus metrics without accepting request content."""
         return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+    @app.get("/docs", include_in_schema=False)
+    async def swagger_ui() -> HTMLResponse:
+        return get_swagger_ui_html(
+            openapi_url=app.openapi_url or "/openapi.json",
+            title=f"{settings.app_name} API",
+        )
+
+    @app.get("/redoc", include_in_schema=False)
+    async def redoc() -> HTMLResponse:
+        return get_redoc_html(
+            openapi_url=app.openapi_url or "/openapi.json",
+            title=f"{settings.app_name} API",
+        )
 
     @app.middleware("http")
     async def request_context_middleware(
