@@ -34,8 +34,17 @@ lint-check: ## Run ruff linter (no fix)
 	uv run ruff check .
 
 .PHONY: typecheck
-typecheck: ## Run pyright
+typecheck: ## Run pyright + mypy on core layers
 	uv run pyright
+	uv run mypy
+
+.PHONY: pyright
+pyright: ## Run pyright only
+	uv run pyright
+
+.PHONY: mypy
+mypy: ## Run mypy on domain + application (strict)
+	uv run mypy
 
 .PHONY: test
 test: ## Run unit tests
@@ -59,6 +68,12 @@ eval-smoke: ## Run evaluation smoke tests
 
 .PHONY: check
 check: format lint-check typecheck test ## Run all quality gates
+
+.PHONY: fix
+fix: ## Auto-fix what we can (format + lint --fix), then re-check
+	uv run ruff format .
+	uv run ruff check . --fix
+	$(MAKE) check
 
 .PHONY: ci
 ci: lint-check typecheck test ## CI pipeline (no format)

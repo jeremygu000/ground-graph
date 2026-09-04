@@ -38,10 +38,19 @@ jobs:
 
       - name: Pyright type check
         run: uv run pyright
-        continue-on-error: false
+
+      - name: Mypy strict (domain + application)
+        run: uv run mypy
 
       - name: Pytest (unit)
         run: uv run pytest -q -m "not integration and not e2e"
+
+      - name: Docker compose config
+        run: |
+          env NEO4J_USER=neo4j NEO4J_PASSWORD=ci \
+              POSTGRES_USER=groundgraph POSTGRES_PASSWORD=ci \
+              PHOENIX_DB=phoenix \
+              docker compose -f docker-compose.yml config -q
 
       - name: Secret scan (basic)
         run: |

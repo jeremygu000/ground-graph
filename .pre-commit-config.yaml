@@ -1,0 +1,80 @@
+# Pre-commit hooks for groundgraph.
+#
+# Uses local hooks (repos: [local]) so the gates run through `uv run`
+# and do not require a network round-trip to download hook repos.
+# This keeps the gate reproducible in air-gapped environments and
+# matches the lockfile-pinned toolchain (AGENTS.md §6).
+#
+# Install:    uv run pre-commit install
+# Run all:    uv run pre-commit run --all-files
+# Skip:       git commit --no-verify (use sparingly)
+
+default_install_hook_types: [pre-commit, commit-msg]
+fail_fast: false
+
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format --check --diff
+        language: system
+        types: [python]
+        pass_filenames: false
+        stages: [pre-commit]
+
+      - id: ruff-lint
+        name: ruff lint
+        entry: uv run ruff check --force-exclude
+        language: system
+        types: [python]
+        pass_filenames: false
+        stages: [pre-commit]
+
+      - id: ruff-lint-fix
+        name: ruff lint (apply fixes)
+        entry: uv run ruff check --fix --force-exclude
+        language: system
+        types: [python]
+        pass_filenames: false
+        stages: [post-checkout, post-merge]
+        always_run: true
+
+      - id: pyright
+        name: pyright (type check)
+        entry: uv run pyright
+        language: system
+        types: [python]
+        pass_filenames: false
+        stages: [pre-commit]
+
+      - id: pytest-unit
+        name: pytest (unit only)
+        entry: uv run pytest -q -m "not integration and not e2e" -x
+        language: system
+        types: [python]
+        pass_filenames: false
+        stages: [pre-push]
+        # Note: pre-push is heavy. Set PRE_COMMIT_SKIP_TESTS=1 to bypass.
+
+      - id: docker-compose-validate
+        name: docker compose config
+        entry: bash -c 'env NEO4J_USER=neo4j NEO4J_PASSWORD=x POSTGRES_USER=groundgraph POSTGRES_PASSWORD=x PHOENIX_DB=phoenix docker compose config -q'
+        language: system
+        pass_filenames: false
+        files: ^(docker-compose\.yml|deploy/docker/.*)$
+        stages: [pre-commit]
+
+      - id: secret-scan
+        name: secret scan
+        entry: bash -c '! grep -RInE "(api[_-]?key|token|secret|password)\s*=\s*[a-zA-Z0-9._-]{16,}" --include="*.py" --include="*.yml" --include="*.yaml" --include="*.env" --include="*.toml" --exclude-dir=.venv --exclude-dir=.git --exclude-dir=deploy .'
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
+
+      - id: no-large-files
+        name: no files larger than 1 MB
+        entry: bash -c 'find . -type f -size +1M -not -path "./.venv/*" -not -path "./.git/*" -not -path "./.pytest_cache/*" -not -path "./.ruff_cache/*" -not -path "./deploy/docker/volumes/*" -not -name "*.lock" 2>/dev/null | head -20 | xargs -I {} echo "LARGE: {}"'
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]

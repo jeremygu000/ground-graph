@@ -1,11 +1,11 @@
 [project]
-name = "agentic-graphrag"
+name = "groundgraph"
 version = "0.1.0"
 description = "Hybrid Agentic GraphRAG system with vertical knowledge graph, horizontal workflow graph, and queryable execution graph"
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "Apache-2.0" }
-authors = [{ name = "GraphRAG Team" }]
+authors = [{ name = "groundgraph Authors" }]
 dependencies = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
@@ -159,3 +159,23 @@ reportMissingTypeArgument = "warning"
 reportAttributeAccessIssue = "warning"
 useLibraryCodeForTypes = true
 strict = ["src/graphrag/domain", "src/graphrag/application"]
+
+[tool.mypy]
+python_version = "3.12"
+mypy_path = "src"
+files = ["src/graphrag/domain", "src/graphrag/application"]
+strict = true
+warn_unused_ignores = true
+warn_return_any = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+no_implicit_optional = true
+check_untyped_defs = true
+ignore_missing_imports = true
+show_error_codes = true
+pretty = true
+exclude = [
+    "^tests/",
+    "^deploy/",
+    "^scripts/",
+]
