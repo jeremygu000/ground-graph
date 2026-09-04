@@ -1,4 +1,4 @@
-# Agentic GraphRAG
+# groundgraph
 
 Hybrid Agentic GraphRAG system combining a vertical knowledge graph, a horizontal workflow graph, and a queryable execution graph. Authoritative plan: `docs/plan.md`. Executable contract: `AGENTS.md`.
 
