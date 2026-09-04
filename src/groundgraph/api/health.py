@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Request, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from groundgraph.application.health import (
     HealthService,
@@ -25,7 +25,7 @@ class PublicDependencyHealth(BaseModel):
 
 class HealthResponse(BaseModel):
     status: str
-    dependencies: list[PublicDependencyHealth] = []
+    dependencies: list[PublicDependencyHealth] = Field(default_factory=list)
 
 
 @router.get("/health/live", response_model=HealthResponse)

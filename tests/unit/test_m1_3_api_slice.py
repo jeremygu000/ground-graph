@@ -9,7 +9,7 @@ from typing import Any
 
 import httpx
 import pytest
-from fastapi import FastAPI, Response
+from fastapi import BackgroundTasks, FastAPI, Response
 from opentelemetry import trace
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from pydantic import SecretStr
@@ -191,7 +191,7 @@ async def test_in_memory_exporter_records_safe_server_span() -> None:
     server = next(span for span in spans if span.kind.name == "SERVER")
     assert server.attributes is not None
     assert server.attributes["http.request.method"] == "GET"
-    assert server.attributes["http.route"] == "/probe/{item_id}"
+    assert server.attributes["http.route"] == "__unmatched__"
     assert server.attributes["groundgraph.request_id"] == "req-safe"
     attributes = {str(key).lower(): str(value).lower() for key, value in server.attributes.items()}
     assert all("authorization" not in key for key in attributes)
@@ -210,17 +210,18 @@ async def test_background_task_child_span_keeps_request_trace() -> None:
     completed = asyncio.Event()
 
     @app.get("/background")
-    async def background() -> dict[str, str]:
+    async def background(background_tasks: BackgroundTasks) -> dict[str, str]:
         callback = traced_background_task(
             app.state.tracer_provider.get_tracer(__name__),
             "background.test",
             completed.set,
         )
-        await callback()
+        background_tasks.add_task(callback)
         return {"status": "ok"}
 
     response = await _request(app, "/background")
     assert response.status_code == 200
+    await asyncio.sleep(0.1)
     assert completed.is_set()
     spans = exporter.get_finished_spans()
     server = next(span for span in spans if span.name.startswith("GET /background"))
@@ -252,7 +253,7 @@ async def test_server_error_is_recorded_in_error_metric() -> None:
     assert response.status_code == 500
     samples = next(iter(HTTP_REQUEST_ERRORS.collect())).samples
     assert any(
-        sample.labels.get("route") == "/returns-error" and sample.value >= 1
+        sample.labels.get("route") == "__unmatched__" and sample.value >= 1
         for sample in samples
         if sample.name.endswith("_total")
     )

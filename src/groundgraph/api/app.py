@@ -12,6 +12,7 @@ from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from fastapi.responses import HTMLResponse, JSONResponse
 from opentelemetry import trace
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from opentelemetry.sdk.metrics.export import MetricReader
 from opentelemetry.sdk.trace.export import SpanExporter
 from opentelemetry.trace import Span
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
@@ -31,8 +32,10 @@ from groundgraph.infrastructure.metrics import (
     HTTP_REQUEST_ERRORS,
 )
 from groundgraph.infrastructure.telemetry import (
+    configure_meter_provider,
     configure_tracing,
     sanitize_attributes,
+    shutdown_meter_provider,
     shutdown_tracing,
 )
 
@@ -41,7 +44,15 @@ SERVER_ERROR_STATUS = 500
 
 def _safe_route(request: Request) -> str:
     route = getattr(request.scope.get("route"), "path", None)
-    return route or request.url.path
+    return route if isinstance(route, str) else "__unmatched__"
+
+
+_ROUTE_EXCLUDE_METRICS = frozenset({"health/live", "health/ready", "metrics", "docs", "redoc"})
+
+
+def _metrics_route(request: Request) -> str:
+    route = _safe_route(request)
+    return route if route not in _ROUTE_EXCLUDE_METRICS else "__engine__"
 
 
 def _server_request_hook(span: Span, scope: dict[str, object]) -> None:
@@ -102,12 +113,13 @@ def create_app(  # noqa: PLR0915 - composition root keeps app lifecycle wiring t
     *,
     health_service: HealthService | None = None,
     span_exporter: SpanExporter | None = None,
+    metric_reader: MetricReader | None = None,
     telemetry_enabled: bool | None = None,
 ) -> FastAPI:
     """Create the API application.
 
-    The app is test-friendly: tracing can be disabled for unit tests,
-    and the process-wide tracer provider is only set once.
+    The app is test-friendly: tracing and metrics can be disabled for unit tests,
+    and the process-wide providers are only set once.
     """
 
     settings = settings or get_settings()
@@ -120,6 +132,13 @@ def create_app(  # noqa: PLR0915 - composition root keeps app lifecycle wiring t
         enable_otlp=tracing_enabled,
         otlp_insecure=settings.otel_exporter_otlp_insecure,
     )
+    meter_provider = configure_meter_provider(
+        settings.otel_service_name,
+        settings.otel_exporter_otlp_endpoint,
+        metric_reader=metric_reader,
+        enable_otlp=tracing_enabled,
+        otlp_insecure=settings.otel_exporter_otlp_insecure,
+    )
 
     instrumented = tracing_enabled or span_exporter is not None
 
@@ -129,10 +148,12 @@ def create_app(  # noqa: PLR0915 - composition root keeps app lifecycle wiring t
         if instrumented:
             FastAPIInstrumentor.uninstrument_app(app)
         shutdown_tracing(tracer_provider)
+        shutdown_meter_provider(meter_provider)
 
     app = FastAPI(title=settings.app_name, lifespan=lifespan)
     app.state.settings = settings
     app.state.tracer_provider = tracer_provider
+    app.state.meter_provider = meter_provider
     app.state.health_service = health_service or build_health_service(settings)
     app.include_router(health_router)
 
@@ -176,61 +197,56 @@ def create_app(  # noqa: PLR0915 - composition root keeps app lifecycle wiring t
                 "span_id": format(span_context.span_id, "016x"),
             }
         )
+        route = _safe_route(request)
+        metrics_route = _metrics_route(request)
+        status_code: int | None = None
+        response: Response | None = None
         try:
             response = await call_next(request)
-            route = _safe_route(request)
+            status_code = response.status_code
+        except Exception:
+            status_code = SERVER_ERROR_STATUS
+        finally:
             duration = time.perf_counter() - started
-            response.headers["x-request-id"] = request_id
-            response.headers["x-correlation-id"] = correlation_id
-            response.headers["x-process-time-ms"] = f"{duration * 1000:.3f}"
+            if status_code == SERVER_ERROR_STATUS:
+                response = JSONResponse(
+                    status_code=SERVER_ERROR_STATUS,
+                    content={"code": "internal_error", "message": "Internal server error"},
+                )
             for key, value in sanitize_attributes(
                 {
                     "groundgraph.request_id": request_id,
                     "groundgraph.correlation_id": correlation_id,
                     "http.route": route,
-                    "http.response.status_code": response.status_code,
+                    "http.response.status_code": status_code,
                 }
             ).items():
                 span.set_attribute(key, value)
-            HTTP_REQUEST_COUNT.labels(request.method, route, str(response.status_code)).inc()
-            HTTP_REQUEST_DURATION.labels(request.method, route).observe(duration)
-            if response.status_code >= SERVER_ERROR_STATUS:
-                HTTP_REQUEST_ERRORS.labels(request.method, route, "server_error").inc()
-                _log_request(
-                    "http.request.failed",
-                    method=request.method,
-                    route=route,
-                    status_code=response.status_code,
-                    duration_seconds=duration,
-                )
-            else:
+            if status_code != SERVER_ERROR_STATUS:
+                HTTP_REQUEST_COUNT.labels(request.method, metrics_route, str(status_code)).inc()
+                HTTP_REQUEST_DURATION.labels(request.method, metrics_route).observe(duration)
                 _log_request(
                     "http.request.completed",
                     method=request.method,
                     route=route,
-                    status_code=response.status_code,
+                    status_code=status_code,
                     duration_seconds=duration,
                 )
-        except Exception:
-            route = _safe_route(request)
-            HTTP_REQUEST_ERRORS.labels(request.method, route, "internal_error").inc()
-            _log_request(
-                "http.request.failed",
-                method=request.method,
-                route=route,
-                error_type="internal_error",
-            )
-            raise
-        finally:
+            else:
+                HTTP_REQUEST_ERRORS.labels(request.method, metrics_route, "server_error").inc()
+                _log_request(
+                    "http.request.failed",
+                    method=request.method,
+                    route=route,
+                    status_code=status_code,
+                    duration_seconds=duration,
+                )
             clear_request_context()
+        assert response is not None
+        response.headers["x-request-id"] = request_id
+        response.headers["x-correlation-id"] = correlation_id
+        response.headers["x-process-time-ms"] = f"{(time.perf_counter() - started) * 1000:.3f}"
         return response
-
-    @app.exception_handler(Exception)
-    async def _exception_handler(_: Request, __: Exception) -> JSONResponse:
-        return JSONResponse(
-            status_code=SERVER_ERROR_STATUS,
-            content={"code": "internal_error", "message": "Internal server error"},
-        )
 
     # Add the OpenTelemetry middleware last, making it the outer request
     # middleware. The request context middleware can then enrich its server span.

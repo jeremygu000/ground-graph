@@ -73,6 +73,9 @@ deploy/docker/volumes/
 .mypy_cache/
 .ruff_cache/
 
+# Agent skills
+.agents/
+
 # Telemetry
 telemetry/
 phoenix/

@@ -6,7 +6,10 @@ import asyncio
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    from opentelemetry.trace import Tracer
 
 
 class HealthReasonCode(StrEnum):
@@ -37,10 +40,11 @@ class HealthChecker(Protocol):
 
 @dataclass(slots=True)
 class HealthService:
-    """Run dependency probes concurrently with bounded timeout."""
+    """Run dependency probes concurrently with bounded timeout and OTel spans."""
 
     checkers: Mapping[str, HealthChecker]
     timeout_seconds: float = 2.0
+    tracer: Tracer | None = None
 
     async def check_all(self) -> list[DependencyHealth]:
         return await asyncio.gather(
@@ -48,22 +52,45 @@ class HealthService:
         )
 
     async def _probe(self, name: str, checker: HealthChecker) -> DependencyHealth:
-        try:
-            return await asyncio.wait_for(checker.check(), timeout=self.timeout_seconds)
-        except TimeoutError:
-            return DependencyHealth(
-                name=name,
-                healthy=False,
-                reason_code=HealthReasonCode.TIMEOUT,
-                details="dependency timed out",
-            )
-        except Exception:
-            return DependencyHealth(
-                name=name,
-                healthy=False,
-                reason_code=HealthReasonCode.ERROR,
-                details="dependency probe failed",
-            )
+        from opentelemetry import trace  # noqa: PLC0415 - domain layer avoids OTel imports
+
+        tracer = self.tracer or trace.get_tracer(__name__)
+        operation = "check"
+        with tracer.start_as_current_span(
+            f"healthcheck.{name}",
+            kind=trace.SpanKind.CLIENT,
+        ) as span:
+            span.set_attribute("dependency.name", name)
+            span.set_attribute("dependency.operation", operation)
+            try:
+                result = await asyncio.wait_for(checker.check(), timeout=self.timeout_seconds)
+                span.set_attribute(
+                    "dependency.result", "healthy" if result.healthy else "unhealthy"
+                )
+                span.set_attribute("dependency.reason_code", result.reason_code.value)
+                if result.details:
+                    span.set_attribute("dependency.details", result.details)
+                if not result.healthy:
+                    span.set_attribute("error.type", result.reason_code.value)
+                return result  # noqa: TRY300 - unconditional return after span setup
+            except TimeoutError:
+                span.set_attribute("dependency.result", "timeout")
+                span.set_attribute("error.type", "TimeoutError")
+                return DependencyHealth(
+                    name=name,
+                    healthy=False,
+                    reason_code=HealthReasonCode.TIMEOUT,
+                    details="dependency timed out",
+                )
+            except Exception as exc:
+                span.set_attribute("dependency.result", "error")
+                span.set_attribute("error.type", type(exc).__name__)
+                return DependencyHealth(
+                    name=name,
+                    healthy=False,
+                    reason_code=HealthReasonCode.ERROR,
+                    details="dependency probe failed",
+                )
 
 
 def readiness_healthy(results: list[DependencyHealth]) -> bool:
