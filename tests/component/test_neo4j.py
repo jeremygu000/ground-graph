@@ -84,7 +84,13 @@ def test_neo4j_unique_constraint(neo4j_component: Any) -> None:
 
 
 def test_neo4j_transaction_rollback(neo4j_component: Any) -> None:
-    """Within an explicit transaction, ROLLBACK discards the writes."""
+    """Within an explicit transaction, ROLLBACK discards the writes.
+
+    The CREATE is consumed (Result.consume()) so the write is fully
+    flushed to the server before the rollback is issued — otherwise
+    the assertion below could observe the row never existed even if
+    the rollback silently failed.
+    """
     driver = GraphDatabase.driver(
         neo4j_component.uri, auth=(neo4j_component.user, neo4j_component.password)
     )
@@ -94,17 +100,9 @@ def test_neo4j_transaction_rollback(neo4j_component: Any) -> None:
             label = "_TxnTest"
             session.run(f"MATCH (n:{label}) DETACH DELETE n")
 
-            def _create(tx: Any) -> None:
-                tx.run(f"CREATE (:{label} {{name: 'will-be-rolled-back'}})")
-
-            try:
-                with session.begin_transaction() as tx:
-                    _create(tx)
-                    tx.rollback()
-            except Exception:
-                # Some driver versions raise on explicit rollback after
-                # writes; we tolerate that as long as the data is gone.
-                pass
+            with session.begin_transaction() as tx:
+                tx.run(f"CREATE (:{label} {{name: 'will-be-rolled-back'}})").consume()
+                tx.rollback()
 
             record = session.run(f"MATCH (n:{label}) RETURN count(n) AS c").single()
             assert record is not None, "expected a count record from Neo4j"

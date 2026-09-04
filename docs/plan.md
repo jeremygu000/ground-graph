@@ -44,8 +44,12 @@ Update `[ ]` to `[x]` only after the milestone acceptance criteria and validatio
 
 - [x] M0 — Repository and engineering baseline
 - [x] M1 — Local infrastructure and telemetry foundation
-- [x] M2.0 — Containerized component test foundation (Testcontainers for Postgres/pgvector + Neo4j; stack smoke retained)
-- [ ] M2 — Domain contracts and persistence model
+  - follow-up landed: Testcontainers-based component-test foundation
+    (Postgres/pgvector + Neo4j fixtures, 4-layer marker split:
+    unit / component / stack / fault) — see ADR-010 and
+    `tests/component/`. This is M1 testing-infrastructure follow-up,
+    not a new milestone.
+- [ ] M2 — Domain contracts and persistence model (domain types, ports, Postgres + Neo4j adapters, Alembic migrations)
 - [ ] M3 — Document ingestion and versioning
 - [ ] M4 — Vector RAG baseline
 - [ ] M5 — Knowledge graph construction

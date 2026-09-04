@@ -99,11 +99,11 @@ async def test_rollback_isolation_between_sessions(postgres_component: Any) -> N
         await engine.dispose()
 
 
-async def test_connection_pool_handles_repeated_disconnects(postgres_component: Any) -> None:
-    """A pool that disconnects 10x in a row should still serve queries.
-
-    This catches the 'pool stale connection after engine restart'
-    failure mode that bit us in M1's recovery tests.
+async def test_connection_pool_handles_repeated_checkouts(postgres_component: Any) -> None:
+    """A pool that serves 10x repeated checkout/checkin should still
+    serve queries. This exercises pool recycling, not a real
+    disconnect; engine-restart and stale-connection recovery is
+    covered by ``fault`` tests (M9+).
     """
     engine: AsyncEngine = create_async_engine(
         postgres_component.dsn,

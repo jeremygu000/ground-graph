@@ -5,7 +5,7 @@ Testcontainers rather than the full docker-compose stack. This is much
 cheaper to run, hermetic (no shared state with other tests), and lets
 us pin a specific image version per fixture.
 
-Layering (see ADR-NNN-testcontainers-component-foundation.md):
+Layering (see ADR-010-testcontainers-component-foundation.md):
 
   ┌─────────────────────────────────────────────────────────────┐
   │ Stack smoke tests        → tests/integration/test_m1_stack.py│

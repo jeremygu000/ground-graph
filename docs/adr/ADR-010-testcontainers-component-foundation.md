@@ -1,7 +1,7 @@
 - **Status**: Accepted
 - **Date**: 2026-09-05
 - **Deciders**: implementation agent + user
-- **Related**: AGENTS.md §0.6 (verification commands), M1 sign-off, M2.0 (Containerized component test foundation)
+- **Related**: AGENTS.md §0.6 (verification commands), M1 sign-off, M1 follow-up (this ADR), future M2 adapters
 
 ## Context
 
@@ -39,7 +39,7 @@ Makefile targets:
 | Unit             | (none)                                | `make test`        | no            | ~2 s       |
 | Component        | `@pytest.mark.integration` + `@pytest.mark.component` | `make test-component` | Testcontainers (one container at a time) | ~10 s |
 | Stack smoke      | `@pytest.mark.integration` + `@pytest.mark.stack` | `make test-stack` | docker compose up (7 services) | ~90 s |
-| Fault injection  | `@pytest.mark.integration` + `@pytest.mark.fault` | `make test-fault` | docker compose up + destructive action | isolated |
+| Fault injection  | `@pytest.mark.integration` + `@pytest.mark.fault` | `make test-fault` | dedicated Testcontainer (or other isolated fixture) — destructive action runs in a per-test container, never the shared compose session | isolated per test |
 | Combined         | `@pytest.mark.integration`            | `make test-integration` | both | ~100 s |
 
 Rules:
@@ -119,4 +119,5 @@ Trade-offs accepted:
     `test-fault`, `test-integration`
   * `uv.lock` — `testcontainers==4.15.0` (single source of
     truth for the dep version)
-  * `docs/plan.md` — M2.0 entry on the progress ledger
+  * `docs/plan.md` — M1 follow-up note on the progress ledger
+    (this work is part of M1 follow-up, not a separate milestone)
