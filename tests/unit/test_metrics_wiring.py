@@ -112,6 +112,20 @@ def test_dashboard_references_otel_internal_job() -> None:
                 )
 
 
+def test_dashboard_references_groundgraph_application_job() -> None:
+    """The application connectivity panel must point at the application job."""
+    parsed = json.loads(DASHBOARD.read_text(encoding="utf-8"))
+    queries = []
+    for panel in parsed.get("panels", []) or []:
+        for target in panel.get("targets", []) or []:
+            expr = target.get("expr", "")
+            if isinstance(expr, str):
+                queries.append(expr)
+    joined = "\n".join(queries)
+    assert 'job="groundgraph-application"' in joined
+    assert 'up{job="groundgraph-application"}' in joined
+
+
 def test_phoenix_image_has_prometheus_port_exposed() -> None:
     """Phoenix container must expose its internal :9090 metrics port
     so Prometheus can reach it. (Host mapping is to :9091 to avoid
@@ -119,17 +133,11 @@ def test_phoenix_image_has_prometheus_port_exposed() -> None:
     """
     compose = _load_yaml(COMPOSE)
     ports = compose["services"]["phoenix"].get("ports", []) or []
-    published: set[str] = set()
     for p in ports:
-        if isinstance(p, str):
-            published.add(p.split(":")[-1].split("/")[0])
-        elif isinstance(p, dict):
-            published.add(str(p.get("published", "")))
-    # Either the container-internal :9090 or a host :9091 mapping is fine;
-    # the key is that the metric port is reachable from the
-    # `groundgraph-net` network. Since `phoenix:9090` is the in-network
-    # name:port, and the host port only matters for ad-hoc inspection,
-    # we only require the metrics env var to be on.
+        if isinstance(p, str) and (p.endswith(":9090") or p.endswith(":9091")):
+            break
+        if isinstance(p, dict) and str(p.get("target", "")) == "9090":
+            break
     env = compose["services"]["phoenix"].get("environment", {})
     assert env.get("PHOENIX_ENABLE_PROMETHEUS") == "true", (
         "Phoenix must enable its Prometheus metrics endpoint"

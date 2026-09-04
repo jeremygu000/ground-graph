@@ -58,18 +58,13 @@
     },
     {
       "type": "timeseries",
-      "title": "Application OTLP metrics (job: groundgraph-application, :8889)",
+      "title": "Application metrics target (:8889)",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
       "targets": [
         {
-          "expr": "rate(otelcol_exporter_sent_metric_points{job=\"otel-collector-internal\", exporter=\"prometheus\"}[1m])",
-          "legendFormat": "sent metric points/s",
+          "expr": "up{job=\"groundgraph-application\"}",
+          "legendFormat": "application exporter up",
           "refId": "A"
-        },
-        {
-          "expr": "rate(otelcol_exporter_send_failed_metric_points{job=\"otel-collector-internal\", exporter=\"prometheus\"}[1m])",
-          "legendFormat": "send failed/s",
-          "refId": "B"
         }
       ]
     },
