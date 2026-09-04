@@ -7,7 +7,7 @@ Hybrid Agentic GraphRAG system combining a vertical knowledge graph, a horizonta
 | Milestone | Status |
 |---|---|
 | M0 — Repository and engineering baseline | Complete |
-| M1 — Local infrastructure and telemetry | Pending |
+| M1 — Local infrastructure and telemetry | Complete |
 | M2 — Domain contracts and persistence | Pending |
 | M3 — Document ingestion and versioning | Pending |
 | M4 — Vector RAG baseline | Pending |
@@ -32,8 +32,36 @@ make format         # ruff format
 make lint           # ruff check
 make typecheck      # pyright
 make test           # pytest (unit only)
+make test-integration  # bring up docker-compose stack and run integration tests
 make check          # format + lint + typecheck + test
 ```
+
+## Local infrastructure
+
+M1 brings up a 7-service local stack via docker-compose, with per-service
+memory caps so the full stack fits comfortably in 7-8 GB of host RAM
+(observed RSS < 1.5 GB):
+
+```bash
+docker compose up -d
+```
+
+| Service | Port (host) | Purpose |
+|---|---|---|
+| PostgreSQL + pgvector | 5432 | Application database |
+| Neo4j | 7474 / 7687 | Knowledge graph |
+| MinIO | 9000 / 9001 | S3-compatible object storage |
+| OTel Collector | 4317 / 4318 / 8888 / 8889 | OTLP ingest, Prometheus exporter |
+| Phoenix | 6006 | Trace UI + observability backend |
+| Prometheus | 9090 | Metrics scraper + storage |
+| Grafana | 3001 | Dashboards (admin / `change-me-local-only`) |
+
+The FastAPI app connects to the stack at runtime via the
+`app_process` pytest fixture (or manually via the same env vars).
+Health endpoints:
+
+- `GET /health/live` — process liveness, always 200
+- `GET /health/ready` — 200 when all dependencies are reachable, 503 otherwise
 
 ## Layout
 
