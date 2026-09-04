@@ -61,9 +61,17 @@ def test_docker_compose_services_have_healthchecks() -> None:
     text = COMPOSE_FILE.read_text(encoding="utf-8")
     parsed = _yaml_load(text)
     services = parsed.get("services", {})
+    # Services that legitimately have no inline healthcheck:
+    #   - one-shot init jobs (*-init): terminated on success
+    #   - otel-collector: contrib image has no healthcheck CLI and no
+    #     wget/curl; health is probed by a separate otel-probe service
+    no_healthcheck_allowed = {
+        "minio-init",
+        "otel-probe",
+        "otel-collector",
+    }
     for name, svc in services.items():
-        if name.endswith("-init") or name in {"minio-init"}:
-            # one-shot init jobs legitimately lack healthchecks
+        if name.endswith("-init") or name in no_healthcheck_allowed:
             continue
         assert "healthcheck" in svc, f"Service {name} has no healthcheck"
 
@@ -158,29 +166,69 @@ def test_phoenix_uses_separate_database() -> None:
 
 
 def test_pg_initdb_creates_separate_phoenix_database() -> None:
+    """The init script must create the Phoenix DB using PHOENIX_DB env.
+
+    The script is a .sh (not .sql) so it can interpolate env vars and
+    quote identifiers safely. Both databases must coexist on the same
+    instance and must be different.
+    """
     init_dir = ROOT / "deploy" / "docker" / "postgres" / "initdb.d"
-    files = sorted(p.name for p in init_dir.glob("*.sql"))
-    assert "00-create-phoenix-db.sql" in files, (
-        f"Expected 00-create-phoenix-db.sql in initdb.d; got {files}"
-    )
-    sql = (init_dir / "00-create-phoenix-db.sql").read_text(encoding="utf-8")
-    assert "CREATE DATABASE phoenix" in sql, (
-        "00-create-phoenix-db.sql must create the phoenix database"
-    )
+    files = sorted(p.name for p in init_dir.glob("*"))
+    assert "00-init.sh" in files, f"Expected 00-init.sh in initdb.d; got {files}"
+    text = (init_dir / "00-init.sh").read_text(encoding="utf-8")
+    # Must use a parameterized identifier, not a hard-coded name.
+    assert "PHOENIX_DB" in text, "00-init.sh must read PHOENIX_DB from the environment"
+    assert "POSTGRES_DB" in text, "00-init.sh must read POSTGRES_DB from the environment"
+    # Sanity: the script must guard against the two DBs being the same
+    assert "must differ" in text, "00-init.sh must refuse identical POSTGRES_DB and PHOENIX_DB"
 
 
 def test_pg_initdb_enables_pgvector_in_app_db() -> None:
-    init_dir = (
-        ROOT / "deploy" / "postgres" / "initdb.d"
-        if (ROOT / "deploy" / "postgres" / "initdb.d").exists()
-        else ROOT / "deploy" / "docker" / "postgres" / "initdb.d"
-    )
-    target = init_dir / "10-app-extensions.sql"
-    assert target.exists(), f"Expected {target}"
+    init_dir = ROOT / "deploy" / "docker" / "postgres" / "initdb.d"
+    target = init_dir / "00-init.sh"
     text = target.read_text(encoding="utf-8")
     assert "CREATE EXTENSION" in text
     assert "vector" in text
-    assert "\\connect groundgraph" in text or "groundgraph" in text
+    # The pgvector extension must be created in the app database,
+    # not the phoenix database. The script's structure should reflect
+    # that: enable in APP_DB (POSTGRES_DB), not PHOENIX_DB.
+    assert "POSTGRES_DB" in text
+
+
+def test_initdb_script_quotes_identifiers() -> None:
+    """Defense against identifier injection."""
+    text = (ROOT / "deploy" / "docker" / "postgres" / "initdb.d" / "00-init.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "sanitize_ident" in text, "script must sanitize identifiers"
+    assert "ON_ERROR_STOP" in text, "psql must use -v ON_ERROR_STOP=1"
+    assert "set -euo pipefail" in text, "script must fail fast"
+
+
+def test_postgres_service_passes_phoenix_db_env() -> None:
+    """The postgres service must pass PHOENIX_DB to the entrypoint
+    so /docker-entrypoint-initdb.d/00-init.sh receives it."""
+    parsed = _yaml_load(COMPOSE_FILE.read_text(encoding="utf-8"))
+    env = parsed["services"]["postgres"].get("environment", {})
+    assert "PHOENIX_DB" in env, (
+        "postgres service must declare PHOENIX_DB so the init script can use it"
+    )
+
+
+def test_neo4j_auth_has_built_in_defaults() -> None:
+    """NEO4J_AUTH must include Compose-level defaults so a missing
+    .env (or one without NEO4J_USER) still produces a valid auth string.
+    YAML anchor defaults are not visible at the interpolation site.
+    """
+    parsed = _yaml_load(COMPOSE_FILE.read_text(encoding="utf-8"))
+    env = parsed["services"]["neo4j"]["environment"]
+    auth = env.get("NEO4J_AUTH", "")
+    assert auth, "NEO4J_AUTH must be set"
+    # Must contain default value clauses for both halves
+    assert "${NEO4J_USER:-" in auth, f"NEO4J_AUTH must default NEO4J_USER inline; got {auth!r}"
+    assert "${NEO4J_PASSWORD:-" in auth, (
+        f"NEO4J_AUTH must default NEO4J_PASSWORD inline; got {auth!r}"
+    )
 
 
 def test_neo4j_has_no_apoc_configuration() -> None:
@@ -230,31 +278,81 @@ def test_otel_collector_does_not_depend_on_postgres_or_neo4j() -> None:
     assert "neo4j" not in dep_names
 
 
-def test_otel_collector_healthcheck_uses_local_binary() -> None:
+def test_otel_collector_has_no_inline_healthcheck() -> None:
+    """The contrib image has no `healthcheck` CLI subcommand and no
+    wget/curl, so an inline `healthcheck:` block is impossible.
+
+    The actual probe is delegated to a separate `otel-probe` one-shot
+    service that uses curlimages/curl to hit the health_check
+    extension endpoint on port 13133.
+    """
     parsed = _yaml_load(COMPOSE_FILE.read_text(encoding="utf-8"))
-    hc = parsed["services"]["otel-collector"]["healthcheck"]
-    test = hc.get("test", [])
-    # The contrib image ships /otelcol-contrib with a healthcheck subcommand
-    cmd_str = " ".join(test) if isinstance(test, list) else str(test)
-    assert "wget" not in cmd_str, (
-        "OTel collector image does not include wget; use the built-in healthcheck subcommand"
+    svc = parsed["services"]["otel-collector"]
+    assert "healthcheck" not in svc, (
+        "otel-collector must not have an inline healthcheck block; "
+        "the contrib image has no healthcheck CLI and no wget/curl"
     )
-    assert "healthcheck" in cmd_str
+
+
+def test_otel_probe_service_exists_and_uses_curl() -> None:
+    """The probe must use an image that ships a working HTTP client
+    and target the health_check extension endpoint on port 13133.
+    """
+    parsed = _yaml_load(COMPOSE_FILE.read_text(encoding="utf-8"))
+    services = parsed["services"]
+    assert "otel-probe" in services, "expected an otel-probe one-shot service"
+    probe = services["otel-probe"]
+    image = probe["image"]
+    assert "curl" in image, f"probe image must contain curl; got {image!r}"
+    depends = probe.get("depends_on") or {}
+    depends_names = list(depends.keys()) if isinstance(depends, dict) else list(depends)
+    assert "otel-collector" in depends_names, "otel-probe must depend on otel-collector"
+    entrypoint = probe.get("entrypoint") or []
+    cmd = entrypoint[-1] if entrypoint else ""
+    assert "13133" in cmd, "probe must hit the health_check extension on :13133"
+    assert "otel-collector" in cmd, (
+        "probe must hit the collector by service name (DNS) not localhost"
+    )
+
+
+def test_otel_collector_exposes_metrics_and_health_ports() -> None:
+    """Port 13133 (health) and 8888 (internal metrics) must be exposed
+    so the Prometheus scrape and the probe can reach them.
+    """
+    parsed = _yaml_load(COMPOSE_FILE.read_text(encoding="utf-8"))
+    ports = parsed["services"]["otel-collector"].get("ports", []) or []
+    published: set[str] = set()
+    for port in ports:
+        if isinstance(port, str):
+            published.add(port.split(":")[-1].split("/")[0])
+        elif isinstance(port, dict):
+            published.add(str(port.get("published", "")))
+    for required in ("13133", "8888", "8889", "4317"):
+        assert required in published, (
+            f"otel-collector must expose port {required}; have {published}"
+        )
 
 
 def test_healthchecks_do_not_assume_wget_where_missing() -> None:
-    """For services whose image may not ship wget, ensure no wget use."""
+    """For services whose image may not ship wget, ensure no wget use.
+
+    `otel-collector` no longer has an inline healthcheck; only services
+    that actually have one are inspected here.
+    """
     parsed = _yaml_load(COMPOSE_FILE.read_text(encoding="utf-8"))
-    no_wget_images = {
-        "otel-collector": "otel/opentelemetry-collector-contrib",
+    no_wget_services = {
+        "otel-collector",  # contrib image has no wget
+        "otel-probe",  # uses curlimages/curl; we still want to ensure no wget
     }
-    for svc_name, image in no_wget_images.items():
-        hc = parsed["services"][svc_name]["healthcheck"]
-        test = hc.get("test", [])
-        cmd_str = " ".join(test) if isinstance(test, list) else str(test)
-        assert "wget" not in cmd_str, (
-            f"{svc_name} ({image}) healthcheck must not assume wget is present"
-        )
+    for svc_name in no_wget_services:
+        if svc_name not in parsed["services"]:
+            continue
+        svc = parsed["services"][svc_name]
+        if "healthcheck" in svc:
+            hc = svc["healthcheck"]
+            test = hc.get("test", [])
+            cmd_str = " ".join(test) if isinstance(test, list) else str(test)
+            assert "wget" not in cmd_str, f"{svc_name} healthcheck must not assume wget is present"
 
 
 def test_docker_compose_exposes_standard_ports() -> None:

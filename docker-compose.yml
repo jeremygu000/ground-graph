@@ -40,6 +40,10 @@ services:
     <<: [*restart, *logging]
     environment:
       <<: *pg-env
+      # The init script reads PHOENIX_DB to create the dedicated
+      # Phoenix database. Must be passed here so the entrypoint
+      # forwards it to /docker-entrypoint-initdb.d/00-init.sh.
+      PHOENIX_DB: ${PHOENIX_DB:-phoenix}
       PGDATA: /var/lib/postgresql/data/pgdata
     ports:
       - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
@@ -65,7 +69,11 @@ services:
     <<: [*restart, *logging]
     environment:
       <<: *neo4j-env
-      NEO4J_AUTH: "${NEO4J_USER}/${NEO4J_PASSWORD}"
+      # Interpolate defaults at the variable site so a missing env file
+      # (or a Compose run with --env-file that does not set NEO4J_USER)
+      # still produces a valid auth string. Do NOT rely on YAML anchor
+      # default values here — Compose does not see them.
+      NEO4J_AUTH: "${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD:-change-me-local-only}"
       NEO4J_PLUGINS: '[]'
       NEO4J_dbms_security_procedures_unrestricted: ''
       NEO4J_server_memory_heap_initial__size: 512m
@@ -138,6 +146,12 @@ services:
 
   # ---------------------------------------------------------------------------
   # OpenTelemetry Collector
+  #
+  # The contrib image does not ship a `healthcheck` CLI subcommand and
+  # does not contain wget/curl, so the standard container-level
+  # healthcheck is implemented as a separate `otel-probe` one-shot
+  # service (see below). The collector itself exposes a health endpoint
+  # on :13133 via the `health_check` extension (see collector-config.yaml).
   # ---------------------------------------------------------------------------
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.111.0
@@ -148,19 +162,35 @@ services:
     ports:
       - "127.0.0.1:4317:4317"
       - "127.0.0.1:4318:4318"
+      - "127.0.0.1:13133:13133"   # health_check extension endpoint
+      - "127.0.0.1:8888:8888"     # internal metrics
+      - "127.0.0.1:8889:8889"     # app metrics (Prometheus exporter)
     depends_on:
       phoenix:
         condition: service_started
-    healthcheck:
-      test:
-        - CMD
-        - /otelcol-contrib
-        - healthcheck
-        - --config=/etc/otelcol/config.yaml
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 15s
+    networks:
+      - groundgraph-net
+
+  otel-probe:
+    image: curlimages/curl:8.10.1
+    depends_on:
+      otel-collector:
+        condition: service_started
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        echo "Probing otel-collector health endpoint..."
+        for i in 1 2 3 4 5 6 7 8 9 10; do
+          if curl -fsS http://otel-collector:13133/ >/dev/null; then
+            echo "OK: otel-collector health endpoint reachable"
+            exit 0
+          fi
+          sleep 2
+        done
+        echo "FAIL: otel-collector health endpoint unreachable after 20s"
+        exit 1
+    restart: "no"
     networks:
       - groundgraph-net
 
