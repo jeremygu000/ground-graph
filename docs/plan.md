@@ -179,13 +179,13 @@ Infrastructure implements these ports. LangGraph may call application services b
 ### 2.3 Repository layout
 
 ```text
-agentic-graphrag/
+groundgraph/
 ├── apps/
 │   ├── api/
 │   ├── ingestion_worker/
 │   ├── evaluation_runner/
 │   └── web/                         # added in M10, optional before then
-├── src/graphrag/
+├── src/groundgraph/
 │   ├── domain/
 │   │   ├── documents/
 │   │   ├── knowledge/

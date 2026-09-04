@@ -14,7 +14,7 @@ help: ## Show this help
 
 .PHONY: setup
 setup: ## Install dependencies and pre-commit
-	uv sync --all-extras
+	uv sync --locked --all-extras
 	uv run pre-commit install
 
 .PHONY: install
@@ -63,15 +63,15 @@ test-all: ## Run all tests including integration
 	uv run pytest -q
 
 .PHONY: test-cov
-test-cov: ## Run unit tests with coverage
-	uv run pytest -q -m "not integration and not e2e" --cov=src/groundgraph --cov-report=term-missing
+test-cov: ## Run unit tests with coverage gate
+	uv run pytest -q -m "not integration and not e2e" --cov=src/groundgraph --cov-report=term-missing --cov-fail-under=85
 
 .PHONY: eval-smoke
 eval-smoke: ## Run evaluation smoke tests
 	uv run python -m groundgraph.application.evaluation.smoke
 
 .PHONY: check
-check: format-check lint-check typecheck test ## Run all quality gates (read-only)
+check: format-check lint-check typecheck test-cov ## Run all quality gates (read-only)
 
 .PHONY: fix
 fix: ## Auto-fix what we can (format + lint --fix), then re-check
@@ -80,7 +80,7 @@ fix: ## Auto-fix what we can (format + lint --fix), then re-check
 	$(MAKE) check
 
 .PHONY: ci
-ci: format-check lint-check typecheck test ## CI pipeline (read-only)
+ci: format-check lint-check typecheck test-cov ## CI pipeline (read-only)
 
 .PHONY: clean
 clean: ## Remove caches and build artifacts

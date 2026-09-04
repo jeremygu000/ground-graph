@@ -153,8 +153,36 @@ def test_makefile_check_runs_all_gates() -> None:
     match = re.search(r"^check:\s*([^\n]+)", text, re.MULTILINE)
     assert match, "check target not found"
     deps = match.group(1)
-    for gate in ("format", "lint-check", "typecheck", "test"):
+    # `test-cov` is required (not bare `test`) so the coverage fail_under
+    # gate actually runs as part of `make check` and CI.
+    for gate in ("format-check", "lint-check", "typecheck", "test-cov"):
         assert gate in deps, f"make check must depend on {gate!r}; got {deps!r}"
+
+
+def test_makefile_test_cov_runs_coverage_gate() -> None:
+    """test-cov must pass --cov-fail-under=85 so the gate is real."""
+    text = _read(MAKEFILE)
+    # Makefiles indent recipe lines with TAB, not spaces.
+    match = re.search(r"^test-cov:[^\n]*\n((?:\t[^\n]*\n)+)", text, re.MULTILINE)
+    assert match, "test-cov target not found"
+    body = match.group(1)
+    assert "--cov" in body, "test-cov must run pytest with --cov"
+    assert "cov-fail-under" in body, "test-cov must pass --cov-fail-under=85 to make the gate real"
+
+
+def test_ci_workflow_runs_coverage_gate() -> None:
+    """GitHub Actions must run the coverage command, not bare pytest."""
+    parsed = yaml.safe_load(_read(CI_YML))
+    runs: list[str] = []
+    for job in parsed.get("jobs", {}).values():
+        for step in job.get("steps", []) or []:
+            run = step.get("run")
+            if isinstance(run, str):
+                runs.append(run)
+    joined = "\n".join(runs)
+    assert "cov-fail-under" in joined, (
+        "CI must run pytest with --cov-fail-under so the gate is enforced"
+    )
 
 
 def test_makefile_typecheck_runs_pyright_and_mypy() -> None:

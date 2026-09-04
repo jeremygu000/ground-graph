@@ -120,11 +120,7 @@ filterwarnings = [
 [tool.coverage.run]
 source = ["src/groundgraph"]
 branch = true
-omit = [
-    "*/infrastructure/*",
-    "*/api/*",
-    "*/workflows/*",
-]
+omit = []
 
 [tool.coverage.report]
 precision = 2
@@ -134,14 +130,11 @@ fail_under = 85
 exclude_lines = [
     "pragma: no cover",
     "raise NotImplementedError",
+]
+exclude_also = [
     "if TYPE_CHECKING:",
     "if __name__ == .__main__.:",
     "\\.\\.\\.",
-]
-exclude_also = [
-    "src/groundgraph/infrastructure/.*",
-    "src/groundgraph/api/.*",
-    "src/groundgraph/workflows/.*",
 ]
 
 [tool.pyright]

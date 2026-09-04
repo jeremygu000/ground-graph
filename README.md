@@ -39,7 +39,7 @@ make check          # format + lint + typecheck + test
 
 ```
 apps/                    # api, ingestion_worker, evaluation_runner, web
-src/graphrag/
+  src/groundgraph/
   domain/                # pure types & policies (no framework imports)
   application/           # use cases & ports
   workflows/             # LangGraph adapter (calls application)

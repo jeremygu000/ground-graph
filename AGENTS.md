@@ -37,9 +37,9 @@
 ## 3. 目录布局(必须遵守)
 
 ```
-agentic-graphrag/
+groundgraph/
 ├── apps/{api,ingestion_worker,evaluation_runner,web}/
-├── src/graphrag/
+├── src/groundgraph/
 │   ├── domain/{documents,knowledge,retrieval,evidence,execution,evaluation}/
 │   ├── application/{ingestion,extraction,entity_resolution,retrieval,answering,evaluation}/
 │   ├── workflows/{ingestion_graph,query_graph,evaluation_graph}.py
@@ -100,14 +100,16 @@ domain  ←  application  ←  workflows / API  ←  infrastructure composition
 ## 7. 验证命令(每 milestone 必跑)
 
 ```bash
-uv sync
-uv run ruff format .
+uv sync --locked --all-extras
+uv run ruff format --check .
 uv run ruff check .
 uv run pyright
-uv run pytest -q
+uv run mypy
+uv run pytest --cov=src/groundgraph --cov-fail-under=85
 ```
 
 集成测试需要 Docker 运行中的依赖,使用 `make test-integration` 调用。
+`make check` 会自动运行以上全部步骤,本地和 CI 都用它即可。
 
 ## 8. 完成定义(DoD)
 

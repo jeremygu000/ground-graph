@@ -49,8 +49,8 @@ make test-integration   # runs against the docker stack
 
 - Formatter and linter: [Ruff](https://docs.astral.sh/ruff/).
 - Type checker: [Pyright](https://microsoft.github.io/pyright/) in
-  `standard` mode globally, `strict` on `src/graphrag/domain` and
-  `src/graphrag/application`.
+  `standard` mode globally, `strict` on `src/groundgraph/domain` and
+  `src/groundgraph/application`.
 - Tests: `pytest` with `pytest-asyncio` in `auto` mode.
 - Public APIs and Pydantic contracts must have docstrings.
 - No comments unless they explain non-obvious "why" (system instruction).
@@ -99,7 +99,7 @@ ADR-002: hybrid Postgres + Neo4j storage
   to be up (`make infra-up`) and are tagged `@pytest.mark.integration`.
 - Adversarial cases (prompt injection, authorization) live in
   `tests/adversarial/`. Add new ones as you discover attack vectors.
-- Coverage target: 85% line coverage on `src/graphrag`, but never
+- Coverage target: 85% line coverage on `src/groundgraph`, but never
   game the number — direct tests for security, authorization, and
   provenance take priority.
 
