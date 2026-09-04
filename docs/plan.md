@@ -43,7 +43,7 @@ For ordinary implementation uncertainty, choose the smallest reversible solution
 Update `[ ]` to `[x]` only after the milestone acceptance criteria and validation commands pass.
 
 - [x] M0 — Repository and engineering baseline
-- [x] M1 — Local infrastructure and telemetry foundation
+- [ ] M1 — Local infrastructure and telemetry foundation
 - [ ] M2 — Domain contracts and persistence model
 - [ ] M3 — Document ingestion and versioning
 - [ ] M4 — Vector RAG baseline

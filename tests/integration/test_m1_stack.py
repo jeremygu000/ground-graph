@@ -159,60 +159,6 @@ class TestHealthEndpoints:
         assert "minio" in deps, "minio must be in dependency list"
 
 
-class TestZZZDestructivePostgresRecovery:
-    """Destructive test placed last so postgres stop/restart does not poison
-    other tests. Renamed with ZZZ prefix so pytest class-ordering puts it after
-    every other test class in this file.
-    """
-
-    async def test_ready_returns_503_when_postgres_unavailable(
-        self, docker_stack: Any, app_process: Any
-    ) -> None:
-        _run_compose(["stop", "postgres"], timeout=15)
-        try:
-            # Poll for the app to notice postgres is down. Up to 15s.
-            degraded = False
-            r: httpx.Response | None = None
-            for _ in range(15):
-                async with httpx.AsyncClient() as client:
-                    r = await client.get(f"{docker_stack.api_base_url}/health/ready", timeout=5.0)
-                if r.status_code == 503:
-                    degraded = True
-                    break
-                await asyncio.sleep(1.0)
-            assert degraded, "app should return 503 within 15s after postgres is stopped"
-            assert r is not None
-            data = r.json()
-            dep_by_name = {d["name"]: d for d in data.get("dependencies", [])}
-            pg = dep_by_name.get("postgres")
-            assert pg is not None, "postgres should appear in dependency list"
-            assert pg["healthy"] is False, "postgres should be marked unhealthy"
-        finally:
-            _run_compose(["start", "postgres"], timeout=30)
-            # Health-poll postgres container instead of fixed sleep.
-            recovered = False
-            for _ in range(30):
-                chk = await asyncio.to_thread(
-                    subprocess.run,
-                    [
-                        "docker",
-                        "inspect",
-                        "-f",
-                        "{{.State.Health.Status}}",
-                        "groundgraph-postgres-1",
-                    ],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                    check=False,
-                )
-                if chk.returncode == 0 and chk.stdout.strip() == "healthy":
-                    recovered = True
-                    break
-                await asyncio.sleep(1.0)
-            assert recovered, "postgres container did not report 'healthy' within 30s after restart"
-
-
 class TestTracePropagation:
     """Verify that API request traces are forwarded to Phoenix with full span detail."""
 
@@ -435,31 +381,38 @@ class TestSecretsRedaction:
     ) -> None:
         phoenix_url = f"http://{docker_stack.phoenix_host}:{docker_stack.phoenix_port}"
 
-        # Baseline BEFORE the secret-bearing request.
-        async with httpx.AsyncClient() as client:
-            baseline = await _phoenix_list_traces(client, phoenix_url)
-
+        # Use a unique x-request-id so we can locate the exact trace for
+        # this request. Phoenix emits its own background traces (e.g.
+        # ``HEAD /_ping``), so a "first new trace" approach is unsafe —
+        # the secret check would then run against an unrelated trace and
+        # silently pass. See TestTracePropagation for the same approach.
+        request_id = f"secret-test-{uuid.uuid4().hex}"
         secret_token = f"super-secret-{uuid.uuid4().hex}"
         async with httpx.AsyncClient() as client:
             r = await client.get(
                 f"{docker_stack.api_base_url}/health/ready",
-                headers={"Authorization": f"Bearer {secret_token}"},
+                headers={
+                    "x-request-id": request_id,
+                    "Authorization": f"Bearer {secret_token}",
+                },
                 timeout=5.0,
             )
         assert r.status_code == 200, "request to /health/ready must succeed"
 
+        # Find the trace by the request_id we attached.
         new_trace_id: str | None = None
-        for _ in range(20):
-            await asyncio.sleep(3)
-            async with httpx.AsyncClient() as client:
-                current = await _phoenix_list_traces(client, phoenix_url)
-            new_traces = [tid for tid in current if tid not in baseline]
-            if new_traces:
-                new_trace_id = new_traces[0]
-                break
+        async with httpx.AsyncClient() as client:
+            for _ in range(30):
+                await asyncio.sleep(2)
+                new_trace_id = await _phoenix_find_trace_by_request_id(
+                    client, phoenix_url, request_id
+                )
+                if new_trace_id:
+                    break
 
         assert new_trace_id is not None, (
-            "No new trace appeared in Phoenix after the secret-bearing request."
+            f"No trace in Phoenix contained request_id={request_id} after 60s; "
+            f"cannot verify that secret {secret_token!r} was redacted."
         )
 
         # Fetch FULL spans for ONLY this trace and check them.
@@ -509,29 +462,75 @@ class TestGrafanaObservability:
     async def test_grafana_request_count_and_latency_panels_return_data(
         self, docker_stack: Any, app_process: Any
     ) -> None:
-        """Validate the operations dashboard's request-rate / error-rate / latency
-        panels end-to-end. There is no synthetic HTTP-traffic generator in M1,
-        so a literal ``result > 0`` assertion on these panels would be
-        flaky-by-construction. Instead we verify three things that are
-        sufficient to prove the dashboard is wired up correctly:
+        """Validate the operations dashboard end-to-end with REAL data.
 
-          1. Each required panel exists, has PromQL, and the PromQL parses
-             successfully against Prometheus (status=success).
-          2. Every metric name the dashboard's PromQL references is actually
-             registered in the OTel collector's Prometheus exporter. This
-             proves the dashboard queries the same metric namespace the app
-             emits — when M2+ adds business routes that produce HTTP request
-             samples, the panels will light up automatically.
-          3. A pipeline smoke test: the ``groundgraph_readiness_dependency_healthy``
-             gauge (emitted on every /health/ready call) is present in
-             Prometheus. This proves the full app → OTel collector →
-             Prometheus pipeline is functional.
+        M1 has no business routes, so we cannot rely on background traffic
+        to populate ``groundgraph.http.requests`` / ``...duration``. We
+        instead generate a controlled burst of HTTP traffic against
+        non-existent paths — these produce 404 responses and ARE observed
+        by the app's request metrics middleware (only ``/health/...``,
+        ``/metrics``, ``/docs``, ``/redoc`` are excluded).
+
+        Steps:
+          1. Generate ≥ 30 random 404 requests to produce real
+             counter + histogram samples.
+          2. Wait two full OTel export + Prometheus scrape cycles
+             (test env configures 5s export, Prometheus scrapes every
+             PROMETHEUS_SCRAPE_INTERVAL_SEC).
+          3. Assert the raw series exist in Prometheus:
+               - groundgraph_http_requests_total
+               - groundgraph_http_request_duration_seconds_count
+               - groundgraph_http_request_duration_seconds_bucket
+          4. Execute every target in every required panel and assert the
+             result vector is non-empty.
         """
         password = os.environ.get("GRAFANA_PASSWORD", "change-me-local-only")
         grafana_url = f"http://{docker_stack.grafana_host}:{docker_stack.grafana_port}"
         prom_url = f"http://{docker_stack.prometheus_host}:{docker_stack.prometheus_port}"
 
-        # 1. Fetch the dashboard JSON via the Grafana API.
+        # 1. Generate ≥ 30 random 404 requests.
+        async with httpx.AsyncClient() as client:
+            for _ in range(30):
+                path = f"/__probe__/{uuid.uuid4().hex}"
+                await client.get(f"{docker_stack.api_base_url}{path}", timeout=5.0)
+
+        # 2. Wait for two OTel export + Prometheus scrape cycles.
+        # App export interval = 5s (set by conftest), OTel collector
+        # batch timeout = 5s, Prometheus scrape interval = 15s.
+        wait_sec = int(2 * (5 + PROMETHEUS_SCRAPE_INTERVAL_SEC)) + 5
+        await asyncio.sleep(wait_sec)
+
+        # 3. Assert raw series are populated in Prometheus.
+        async with httpx.AsyncClient() as client:
+            for metric in (
+                "groundgraph_http_requests_total",
+                "groundgraph_http_request_duration_seconds_count",
+                "groundgraph_http_request_duration_seconds_bucket",
+            ):
+                resp = await client.get(
+                    f"{prom_url}/api/v1/query",
+                    params={"query": metric},
+                    timeout=10.0,
+                )
+                assert resp.status_code == 200, (
+                    f"Prometheus query for raw series '{metric}' returned "
+                    f"{resp.status_code}: {resp.text[:200]}"
+                )
+                data = resp.json()
+                assert data.get("status") == "success", (
+                    f"Prometheus query for '{metric}' failed: {data.get('error')}"
+                )
+                result = data.get("data", {}).get("result", [])
+                assert len(result) > 0, (
+                    f"Raw series '{metric}' should have at least one sample in "
+                    f"Prometheus after {wait_sec}s of waiting. The 30 404 "
+                    f"requests should have produced samples, but the metric is "
+                    f"empty. Verify the OTel SDK's PeriodicExportingMetricReader "
+                    f"is configured (export_interval_millis) and the OTel "
+                    f"collector is exporting to its prometheus exporter."
+                )
+
+        # 4. Load the dashboard and validate every panel and every target.
         async with httpx.AsyncClient(auth=("admin", password)) as client:
             r = await client.get(
                 f"{grafana_url}/api/dashboards/uid/groundgraph-operations",
@@ -541,9 +540,9 @@ class TestGrafanaObservability:
             f"Grafana dashboard API should return 200, got {r.status_code}: {r.text[:200]}"
         )
         dashboard = r.json()
-        panels_by_title: dict[str, dict[str, Any]] = {}
+        panels_by_title: dict[str, list[dict[str, Any]]] = {}
         for panel in dashboard.get("dashboard", {}).get("panels", []):
-            panels_by_title[panel.get("title", "")] = panel
+            panels_by_title.setdefault(panel.get("title", ""), []).append(panel)
 
         required_panels = [
             "Request rate (req/s) — groundgraph application",
@@ -555,95 +554,144 @@ class TestGrafanaObservability:
                 f"Required panel '{title}' not found in Grafana dashboard. "
                 f"Available panels: {list(panels_by_title.keys())}"
             )
-            panel = panels_by_title[title]
-            targets = panel.get("targets", [])
-            assert len(targets) > 0, f"Panel '{title}' has no query targets"
-            for target in targets:
-                assert target.get("expr"), f"Panel '{title}' target has empty PromQL expression"
+            for panel in panels_by_title[title]:
+                targets = panel.get("targets", [])
+                assert len(targets) > 0, f"Panel '{title}' has no query targets"
+                for target in targets:
+                    assert target.get("expr"), f"Panel '{title}' target has empty PromQL expression"
 
-        # 2. Verify each panel's PromQL is syntactically valid (status=success).
+        # 5. Execute every target's PromQL and assert a non-empty result
+        # vector. The error-rate query may legitimately return empty
+        # (no 5xx emitted), so we tolerate that single case.
         async with httpx.AsyncClient() as client:
             for title in required_panels:
-                expr = panels_by_title[title]["targets"][0]["expr"]
-                resp = await client.get(
-                    f"{prom_url}/api/v1/query",
-                    params={"query": expr},
-                    timeout=10.0,
-                )
-                assert resp.status_code == 200, (
-                    f"Prometheus query for panel '{title}' returned {resp.status_code}: "
-                    f"{resp.text[:200]}"
-                )
-                data = resp.json()
-                assert data.get("status") == "success", (
-                    f"Prometheus query for panel '{title}' failed (PromQL syntax error?): "
-                    f"{data.get('error', 'unknown')}; expr={expr!r}"
-                )
+                for panel in panels_by_title[title]:
+                    for target in panel["targets"]:
+                        expr = target["expr"]
+                        resp = await client.get(
+                            f"{prom_url}/api/v1/query",
+                            params={"query": expr},
+                            timeout=10.0,
+                        )
+                        assert resp.status_code == 200, (
+                            f"Prometheus query for panel '{title}' target "
+                            f"'{target.get('legendFormat', '?')}' returned "
+                            f"{resp.status_code}: {resp.text[:200]}"
+                        )
+                        data = resp.json()
+                        assert data.get("status") == "success", (
+                            f"Prometheus query for '{title}' failed "
+                            f"(PromQL syntax error?): {data.get('error')}; "
+                            f"expr={expr!r}"
+                        )
+                        result = data.get("data", {}).get("result", [])
+                        if title.startswith("Error rate") and not result:
+                            # Error rate divides 5xx / total; if no 5xx
+                            # occurred yet, the numerator is zero and the
+                            # result is empty. That's acceptable — the
+                            # PromQL is still valid and wired up.
+                            continue
+                        assert len(result) > 0, (
+                            f"Panel '{title}' target '{target.get('legendFormat', '?')}' "
+                            f"PromQL returned no data from Prometheus; expr={expr!r}. "
+                            f"Step 3 already proved the underlying series exist, so "
+                            f"either the PromQL is wrong or the time window is too narrow."
+                        )
 
-        # 3. Verify that the metric names referenced by the dashboard's PromQL
-        # are actually registered in the OTel collector's Prometheus exporter
-        # output. We scrape the collector's own prometheus endpoint and look
-        # for the metric name prefixes. If the app is emitting any of them,
-        # they will appear here. If the app is not yet emitting them (M1 has
-        # no business routes), this assertion will be skipped below.
-        scrape_result = await asyncio.to_thread(
+
+class TestDestructivePostgresRecovery:
+    """Destructive test placed physically at the END of this file so pytest's
+    source-order collection runs it after every other test class. Stops
+    postgres, verifies the app returns 503, then restarts postgres and
+    health-polls until the app fully recovers (``/health/ready`` returns 200).
+    """
+
+    async def test_ready_returns_503_when_postgres_unavailable(
+        self, docker_stack: Any, app_process: Any
+    ) -> None:
+        # Resolve container name dynamically — never hard-code
+        # ``groundgraph-postgres-1`` since the compose project name is
+        # configurable via ``docker compose -p``.
+        ps = await asyncio.to_thread(
             subprocess.run,
             [
                 "docker",
                 "compose",
                 "-f",
                 "docker-compose.yml",
-                "exec",
-                "-T",
-                "prometheus",
-                "wget",
-                "-qO-",
-                "http://otel-collector:8889/metrics",
+                "ps",
+                "-q",
+                "postgres",
             ],
             capture_output=True,
             text=True,
-            timeout=15,
+            timeout=10,
             check=False,
         )
-        collector_output = scrape_result.stdout if scrape_result.returncode == 0 else ""
-
-        # Reference metric names (the dashboard's PromQL references these).
-        # We check the OTel SDK canonical names — Prometheus renames
-        # ``groundgraph.http.requests`` (counter) → ``groundgraph_http_requests_total``.
-        referenced_metrics = {
-            "groundgraph_http_requests_total",
-            "groundgraph_http_request_errors_total",
-            "groundgraph_http_request_duration_seconds",
-        }
-        registered = {m for m in referenced_metrics if m in collector_output}
-        # M1 has no business routes, so ``groundgraph.http.requests`` is not
-        # created at runtime and will not be present in the exporter output.
-        # We don't assert on registered == referenced; instead we record which
-        # ones ARE present and use that as a soft signal in the next step.
-
-        # 4. Pipeline smoke test: the readiness gauge (always emitted on
-        # every /health/ready call) is present in Prometheus.
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(
-                f"{prom_url}/api/v1/query",
-                params={"query": "groundgraph_readiness_dependency_healthy"},
-                timeout=10.0,
-            )
-        data = resp.json()
-        assert data.get("status") == "success"
-        result = data.get("data", {}).get("result", [])
-        assert len(result) > 0, (
-            "groundgraph_readiness_dependency_healthy gauge should be present "
-            "in Prometheus after the app has been running. This proves the "
-            "app → OTel collector → Prometheus metrics pipeline is functional."
+        container_id = ps.stdout.strip().splitlines()[0] if ps.stdout.strip() else ""
+        assert container_id, (
+            "could not resolve postgres container id via 'docker compose ps -q postgres'"
         )
 
-        # 5. If the app has emitted HTTP request samples (M2+ with business
-        # routes), confirm those metric names also appear in the collector's
-        # exporter. In M1 this is informational only.
-        if "groundgraph_http_requests_total" in collector_output:
-            assert "groundgraph_http_requests_total" in registered, (
-                "groundgraph_http_requests_total is in the OTel collector's "
-                "Prometheus exporter but missing from the 'registered' set — "
-                "this is a logic bug in the test."
+        _run_compose(["stop", "postgres"], timeout=15)
+        try:
+            degraded = False
+            r: httpx.Response | None = None
+            for _ in range(15):
+                async with httpx.AsyncClient() as client:
+                    r = await client.get(f"{docker_stack.api_base_url}/health/ready", timeout=5.0)
+                if r.status_code == 503:
+                    degraded = True
+                    break
+                await asyncio.sleep(1.0)
+            assert degraded, "app should return 503 within 15s after postgres is stopped"
+            assert r is not None
+            data = r.json()
+            dep_by_name = {d["name"]: d for d in data.get("dependencies", [])}
+            pg = dep_by_name.get("postgres")
+            assert pg is not None, "postgres should appear in dependency list"
+            assert pg["healthy"] is False, "postgres should be marked unhealthy"
+        finally:
+            _run_compose(["start", "postgres"], timeout=30)
+            # 1) Container reports healthy.
+            recovered_container = False
+            for _ in range(30):
+                chk = await asyncio.to_thread(
+                    subprocess.run,
+                    [
+                        "docker",
+                        "inspect",
+                        "-f",
+                        "{{.State.Health.Status}}",
+                        container_id,
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    check=False,
+                )
+                if chk.returncode == 0 and chk.stdout.strip() == "healthy":
+                    recovered_container = True
+                    break
+                await asyncio.sleep(1.0)
+            assert recovered_container, (
+                f"postgres container {container_id} did not report 'healthy' within 30s"
+            )
+            # 2) App's /health/ready returns 200 again — this proves the
+            # Phoenix/Postgres connection pool recovered end-to-end, not
+            # just the container itself.
+            recovered_app = False
+            for _ in range(30):
+                async with httpx.AsyncClient() as client:
+                    r = await client.get(
+                        f"{docker_stack.api_base_url}/health/ready",
+                        timeout=5.0,
+                    )
+                if r.status_code == 200:
+                    recovered_app = True
+                    break
+                await asyncio.sleep(1.0)
+            assert recovered_app, (
+                "app /health/ready did not return 200 within 30s after postgres restart; "
+                "Phoenix/postgres connection pool may still be recovering"
             )

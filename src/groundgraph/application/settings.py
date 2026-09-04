@@ -82,7 +82,7 @@ class Settings(BaseSettings):
     # production default — high enough to keep the export overhead
     # negligible. Integration tests override this via
     # ``OTEL_METRIC_EXPORT_INTERVAL_MS`` to keep the suite fast.
-    otel_metric_export_interval_ms: int = 60_000
+    otel_metric_export_interval_ms: int = Field(default=60_000, ge=1_000, le=300_000)
 
     prometheus_port: int = 9464
 
