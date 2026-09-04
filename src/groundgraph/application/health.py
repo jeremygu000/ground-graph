@@ -6,7 +6,7 @@ import asyncio
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import TYPE_CHECKING, Protocol, cast, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Tracer
@@ -26,7 +26,6 @@ class DependencyHealth:
     name: str
     healthy: bool
     reason_code: HealthReasonCode = HealthReasonCode.OK
-    details: str | None = None
 
 
 @runtime_checkable
@@ -56,19 +55,10 @@ class HealthService:
 
         tracer = self.tracer or trace.get_tracer(__name__)
         operation = "check"
-        server_span = trace.get_current_span()
-        server_span_ctx = server_span.get_span_context()
         with tracer.start_as_current_span(
             f"healthcheck.{name}",
             kind=trace.SpanKind.CLIENT,
         ) as span:
-            if span.is_recording():
-                parent_ctx = cast("trace.SpanContext | None", getattr(span, "parent", None))
-                if parent_ctx is not None:
-                    assert parent_ctx.span_id == server_span_ctx.span_id, (
-                        f"healthcheck.{name} child span parent span_id mismatch: "
-                        f"expected {server_span_ctx.span_id!r}, got {parent_ctx.span_id!r}"
-                    )
             span.set_attribute("dependency.name", name)
             span.set_attribute("dependency.operation", operation)
             start = asyncio.get_event_loop().time()

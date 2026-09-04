@@ -65,7 +65,6 @@ async def test_health_service_timeout_returns_safe_reason() -> None:
     results = await service.check_all()
     assert results[0].healthy is False
     assert results[0].reason_code is HealthReasonCode.TIMEOUT
-    assert results[0].details is None
 
 
 @pytest.mark.anyio

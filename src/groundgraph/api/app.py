@@ -150,6 +150,8 @@ def create_app(  # noqa: PLR0915 - composition root keeps app lifecycle wiring t
     if app_metrics is None:
         meter = get_meter(meter_provider, settings.otel_service_name)
         app_metrics = init_app_metrics(meter)
+    else:
+        meter = get_meter(meter_provider, settings.otel_service_name)
 
     instrumented = tracing_enabled or span_exporter is not None
 
@@ -165,6 +167,7 @@ def create_app(  # noqa: PLR0915 - composition root keeps app lifecycle wiring t
     app.state.settings = settings
     app.state.tracer_provider = tracer_provider
     app.state.meter_provider = meter_provider
+    app.state.meter = meter
     app.state.app_metrics = app_metrics
 
     health = health_service or build_health_service(settings)
@@ -275,7 +278,7 @@ def create_app(  # noqa: PLR0915 - composition root keeps app lifecycle wiring t
         FastAPIInstrumentor.instrument_app(
             app,
             tracer_provider=tracer_provider,
-            excluded_urls="health/live,health/ready",
+            excluded_urls="health/live",
             http_capture_headers_server_request=[],
             http_capture_headers_server_response=[],
             http_capture_headers_sanitize_fields=["authorization", "cookie", "set-cookie"],

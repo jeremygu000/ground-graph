@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from opentelemetry.metrics import Counter, Histogram, Meter, UpDownCounter
+from opentelemetry.metrics import Counter, Histogram, Meter
 
 
 @dataclass
@@ -17,7 +17,6 @@ class AppMetrics:
     http_request_count: Counter
     http_request_errors: Counter
     http_request_duration: Histogram
-    readiness_dependency_healthy: UpDownCounter
 
 
 def init_app_metrics(meter: Meter) -> AppMetrics:
@@ -35,9 +34,5 @@ def init_app_metrics(meter: Meter) -> AppMetrics:
             "groundgraph.http.request.duration",
             description="HTTP request duration in seconds.",
             unit="s",
-        ),
-        readiness_dependency_healthy=meter.create_up_down_counter(
-            "groundgraph.readiness.dependency.healthy",
-            description="Whether a required readiness dependency is healthy (+1) or unhealthy (0).",
         ),
     )

@@ -221,6 +221,39 @@ async def test_in_memory_exporter_records_safe_server_span() -> None:
 
 
 @pytest.mark.anyio
+async def test_health_ready_server_span_and_dependency_child_spans_are_linked() -> None:
+    exporter = InMemorySpanExporter()
+    _mp, _reader, app_metrics = _make_test_metrics()
+    app = create_app(
+        _settings(),
+        health_service=_healthy_service(),
+        span_exporter=exporter,
+        telemetry_enabled=True,
+        app_metrics=app_metrics,
+    )
+    response = await _request(app, "/health/ready")
+    assert response.status_code == 200
+    spans = exporter.get_finished_spans()
+    ready_server = next(
+        (s for s in spans if s.name == "GET /health/ready" and s.kind.name == "SERVER"),
+        None,
+    )
+    assert ready_server is not None, f"no ready server span; got {[s.name for s in spans]}"
+    dep_spans = [s for s in spans if s.kind.name == "CLIENT" and s.name.startswith("healthcheck.")]
+    assert len(dep_spans) == 3, (
+        f"expected 3 dependency spans, got {len(dep_spans)}: {[s.name for s in dep_spans]}"
+    )
+    for dep in dep_spans:
+        assert dep.context is not None
+        assert dep.context.trace_id == ready_server.context.trace_id
+        assert dep.parent is not None, f"{dep.name} has no parent"
+        assert dep.parent.span_id == ready_server.context.span_id, (
+            f"{dep.name} parent span_id {dep.parent.span_id!r} "
+            f"!= ready_server span_id {ready_server.context.span_id!r}"
+        )
+
+
+@pytest.mark.anyio
 async def test_background_task_child_span_keeps_request_trace() -> None:
     exporter = InMemorySpanExporter()
     _mp, _reader, app_metrics = _make_test_metrics()

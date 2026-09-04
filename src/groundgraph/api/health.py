@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import MutableMapping
+
 from fastapi import APIRouter, Request, Response
+from opentelemetry.metrics import Observation
 from pydantic import BaseModel, Field
 
 from groundgraph.application.health import (
@@ -32,19 +35,38 @@ async def live() -> HealthResponse:
     return HealthResponse(status="ok")
 
 
+def _init_readiness_gauge(
+    meter: object,
+    state: MutableMapping[str, int],
+) -> None:
+    def callback(_options: object) -> list[Observation]:
+        return [Observation(float(value), {"dependency": dep}) for dep, value in state.items()]
+
+    meter.create_observable_gauge(
+        "groundgraph.readiness.dependency.healthy",
+        description="Current health state of each readiness dependency (1=healthy, 0=unhealthy).",
+        callbacks=[callback],
+    )
+
+
 @router.get("/health/ready", response_model=HealthResponse)
 async def ready(
     request: Request,
     response: Response,
 ) -> HealthResponse:
     health_service: HealthService = request.app.state.health_service
-    app_metrics = request.app.state.app_metrics
+    meter = getattr(request.app.state, "meter", None)
+
+    if not hasattr(request.app.state, "_readiness_gauge_state"):
+        request.app.state._readiness_gauge_state: dict[str, int] = {}
+        if meter is not None:
+            _init_readiness_gauge(meter, request.app.state._readiness_gauge_state)
+
     dependencies = await health_service.check_all()
+    state: dict[str, int] = request.app.state._readiness_gauge_state
     for dependency in dependencies:
-        app_metrics.readiness_dependency_healthy.add(
-            1 if dependency.healthy else 0,
-            {"dependency": dependency.name},
-        )
+        state[dependency.name] = 1 if dependency.healthy else 0
+
     response.status_code = readiness_http_status(dependencies)
     public_dependencies = [
         PublicDependencyHealth(
