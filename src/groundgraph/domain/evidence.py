@@ -62,6 +62,7 @@ class OutboxEvent(BaseModel):
     last_error: str | None = None
     created_at: datetime
     claimed_at: datetime | None = None
+    claim_token: str | None = None
     completed_at: datetime | None = None
 
     @field_validator("payload", mode="before")

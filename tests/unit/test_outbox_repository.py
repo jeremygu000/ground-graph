@@ -34,9 +34,12 @@ class _Row:
 
 
 class _Result:
-    def __init__(self, rows: list[_Row] | None = None, row: _Row | None = None) -> None:
+    def __init__(
+        self, rows: list[_Row] | None = None, row: _Row | None = None, rowcount: int = 0
+    ) -> None:
         self._rows = rows or []
         self._row = row
+        self.rowcount = rowcount
 
     def scalars(self) -> _Result:
         return self
@@ -55,6 +58,7 @@ class _Session:
         self.executed: list[Any] = []
         self.rows: dict[UUID, _Row] = {}
         self.claim_rows: list[_Row] = []
+        self._last_claim_token: str | None = None
 
     def add(self, instance: object) -> None:
         self.added.append(cast(_Row, instance))
@@ -62,13 +66,52 @@ class _Session:
     async def flush(self) -> None:
         self.flushed += 1
 
-    async def execute(self, statement: Any, parameters: Any = None) -> _Result:
+    async def execute(self, statement: Any, parameters: Any | None = None) -> _Result:
         self.executed.append(statement)
+        if parameters:
+            self.executed_params = parameters
         if self.claim_rows:
-            rows = list(self.claim_rows)
-            self.claim_rows = []
-            return _Result(rows=rows)
-        return _Result(rows=[])
+            return self._claim_rows()
+        if hasattr(statement, "_values") and hasattr(statement, "_where_criteria"):
+            self._apply_update(statement)
+        return _Result(rowcount=1)
+
+    def _claim_rows(self) -> _Result:
+        rows = list(self.claim_rows)
+        self.claim_rows = []
+        return _Result(rows=rows, rowcount=len(rows))
+
+    def _apply_update(self, statement: Any) -> None:
+        target_event_id = self._target_event_id(statement)
+        if not target_event_id:
+            return
+        row = self.rows.get(cast(UUID, target_event_id))
+        if not row:
+            return
+        for col, raw_value in getattr(statement, "_values", {}).items():
+            col_name = self._column_name(col)
+            if not col_name:
+                continue
+            value = raw_value.value if hasattr(raw_value, "value") else raw_value
+            if hasattr(row, col_name):
+                setattr(row, col_name, value)
+
+    def _target_event_id(self, statement: Any) -> UUID | None:
+        for clause in statement._where_criteria:
+            if not hasattr(clause, "left") or not hasattr(clause, "right"):
+                continue
+            left = clause.left
+            if hasattr(left, "key") and left.key == "event_id":
+                right = clause.right
+                value = right.value if hasattr(right, "value") else right
+                return cast(UUID, value)
+        return None
+
+    def _column_name(self, column: Any) -> str | None:
+        col_str = column if isinstance(column, str) else getattr(column, "key", None)
+        if not col_str:
+            return None
+        return col_str.split(".")[-1]
 
     async def get(self, entity: Any, ident: Any) -> _Row | None:
         return self.rows.get(cast(UUID, ident))

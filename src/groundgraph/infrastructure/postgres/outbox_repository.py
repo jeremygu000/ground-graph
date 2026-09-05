@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from groundgraph.domain.evidence import OutboxEvent, OutboxEventStatus, OutboxEventType
 from groundgraph.infrastructure.postgres.models import Outbox as OutboxModel
@@ -29,7 +29,6 @@ class PostgresOutboxRepository:
             created_at=event.created_at,
             available_at=event.created_at,
             claimed_at=event.claimed_at,
-            completed_at=event.completed_at,
         )
         self._session.add(model)
         await self._session.flush()
@@ -45,7 +44,13 @@ class PostgresOutboxRepository:
         now = datetime.now(UTC)
         result = await self._session.execute(
             select(OutboxModel)
-            .where(OutboxModel.status == OutboxEventStatus.PENDING.value)
+            .where(
+                (OutboxModel.status == OutboxEventStatus.PENDING.value)
+                | (
+                    (OutboxModel.status == OutboxEventStatus.CLAIMED.value)
+                    & (OutboxModel.lease_expires_at <= now)
+                )
+            )
             .where(OutboxModel.available_at <= now)
             .order_by(OutboxModel.created_at)
             .limit(batch_size)
@@ -71,24 +76,45 @@ class PostgresOutboxRepository:
 
     async def mark_completed(self, event_id: UUID, claim_token: str) -> None:
         row = await self._session.get(OutboxModel, event_id)
-        if not row or row.claim_token != claim_token:
+        if not row:
+            raise ValueError("event not found")
+        if row.claim_token != claim_token:
             raise ValueError("invalid claim token")
-        row.status = OutboxEventStatus.COMPLETED.value
-        row.completed_at = datetime.now(UTC)
-        row.lease_expires_at = None
+        if row.status != OutboxEventStatus.CLAIMED.value:
+            raise ValueError("event not in claimed state")
+        await self._session.execute(
+            update(OutboxModel)
+            .where(OutboxModel.event_id == event_id)
+            .values(
+                status=OutboxEventStatus.COMPLETED.value,
+                completed_at=datetime.now(UTC),
+                lease_expires_at=None,
+            )
+        )
         await self._session.flush()
 
     async def mark_failed(self, event_id: UUID, claim_token: str, error: str) -> None:
         row = await self._session.get(OutboxModel, event_id)
-        if not row or row.claim_token != claim_token:
+        if not row:
+            raise ValueError("event not found")
+        if row.claim_token != claim_token:
             raise ValueError("invalid claim token")
-        row.status = OutboxEventStatus.PENDING.value
-        row.last_error = error[:512]
-        row.claimed_by = None
-        row.claim_token = None
-        row.claimed_at = None
-        row.lease_expires_at = None
-        row.available_at = datetime.now(UTC) + timedelta(seconds=min(60, 2**row.attempts))
+        if row.status != OutboxEventStatus.CLAIMED.value:
+            raise ValueError("event not in claimed state")
+        await self._session.execute(
+            update(OutboxModel)
+            .where(OutboxModel.event_id == event_id)
+            .values(
+                status=OutboxEventStatus.PENDING.value,
+                last_error=error[:512],
+                claimed_by=None,
+                claim_token=None,
+                claimed_at=None,
+                lease_expires_at=None,
+                available_at=datetime.now(UTC)
+                + timedelta(seconds=min(3600.0, 2.0 ** (row.attempts + 1))),
+            )
+        )
         await self._session.flush()
 
     def _to_domain(self, row: OutboxModel) -> OutboxEvent:
@@ -103,5 +129,5 @@ class PostgresOutboxRepository:
             last_error=row.last_error,
             created_at=row.created_at,
             claimed_at=row.claimed_at,
-            completed_at=row.completed_at,
+            claim_token=row.claim_token,
         )
