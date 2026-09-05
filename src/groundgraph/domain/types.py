@@ -41,21 +41,27 @@ def _validate(value: object, seen: set[int]) -> JsonValue:
         if object_id in seen:
             raise ValueError("JSON list contains a cycle")
         seen.add(object_id)
-        return [_validate(item, seen) for item in lst]
+        try:
+            return [_validate(item, seen) for item in lst]
+        finally:
+            seen.discard(object_id)
     if isinstance(value, dict):
         dct = cast(dict[object, object], value)
         object_id = id(dct)
         if object_id in seen:
             raise ValueError("JSON dict contains a cycle")
         seen.add(object_id)
-        mapping = cast(dict[object, object], value)
-        result: dict[str, JsonValue] = {}
-        for k, v in mapping.items():
-            if not isinstance(k, str):
-                msg = "JSON object key must be str, got " + type(k).__name__
-                raise TypeError(msg)
-            result[k] = _validate(v, seen)
-        return result
+        try:
+            mapping = cast(dict[object, object], value)
+            result: dict[str, JsonValue] = {}
+            for k, v in mapping.items():
+                if not isinstance(k, str):
+                    msg = "JSON object key must be str, got " + type(k).__name__
+                    raise TypeError(msg)
+                result[k] = _validate(v, seen)
+            return result
+        finally:
+            seen.discard(object_id)
     raise ValueError(
         f"JsonValue must be str | int | float | bool | None | list | dict, "
         f"got {type(value).__name__}"

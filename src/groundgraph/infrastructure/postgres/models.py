@@ -20,6 +20,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     String,
@@ -105,18 +106,7 @@ class Document(Base):
     )
     title: Mapped[str] = mapped_column(Text, nullable=False)
     media_type: Mapped[str] = mapped_column(String(100), nullable=False)
-    current_version_id: Mapped[UUID | None] = mapped_column(
-        PG_UUID,
-        ForeignKey(
-            "document_versions.version_id",
-            ondelete="SET NULL",
-            use_alter=True,
-            name="fk_documents_current_version_id_document_versions",
-            deferrable=True,
-            initially="DEFERRED",
-        ),
-        nullable=True,
-    )
+    current_version_id: Mapped[UUID | None] = mapped_column(PG_UUID, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -134,6 +124,18 @@ class Document(Base):
     )
     chunks: Mapped[list[Chunk]] = relationship(
         "Chunk", back_populates="document", passive_deletes="all"
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["document_id", "current_version_id"],
+            ["document_versions.document_id", "document_versions.version_id"],
+            ondelete="SET NULL",
+            use_alter=True,
+            name="fk_documents_current_version_id_document_versions",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
     )
 
 
@@ -159,12 +161,21 @@ class DocumentVersion(Base):
         foreign_keys=[document_id],
     )
     chunks: Mapped[list[Chunk]] = relationship(
-        "Chunk", back_populates="version", cascade="all, delete-orphan"
+        "Chunk",
+        back_populates="version",
+        cascade="all, delete-orphan",
+        overlaps="chunks",
+        foreign_keys="[Chunk.document_id, Chunk.version_id]",
     )
 
     __table_args__ = (
         Index("ix_document_versions_document_id", "document_id"),
         Index("ix_document_versions_checksum", "checksum"),
+        UniqueConstraint(
+            "document_id",
+            "version_id",
+            name="uq_document_versions_document_id_version_id",
+        ),
         Index(
             "ix_document_versions_current",
             "document_id",
@@ -181,9 +192,7 @@ class Chunk(Base):
     document_id: Mapped[UUID] = mapped_column(
         PG_UUID, ForeignKey("documents.document_id", ondelete="RESTRICT"), nullable=False
     )
-    version_id: Mapped[UUID] = mapped_column(
-        PG_UUID, ForeignKey("document_versions.version_id", ondelete="CASCADE"), nullable=False
-    )
+    version_id: Mapped[UUID] = mapped_column(PG_UUID, nullable=False)
     ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
     heading_path: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list)
     content: Mapped[str] = mapped_column(Text, nullable=False)
@@ -198,8 +207,17 @@ class Chunk(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
-    document: Mapped[Document] = relationship("Document", back_populates="chunks")
-    version: Mapped[DocumentVersion] = relationship("DocumentVersion", back_populates="chunks")
+    document: Mapped[Document] = relationship(
+        "Document",
+        back_populates="chunks",
+        overlaps="chunks",
+    )
+    version: Mapped[DocumentVersion] = relationship(
+        "DocumentVersion",
+        back_populates="chunks",
+        overlaps="chunks,document",
+        foreign_keys=[document_id, version_id],
+    )
     embeddings: Mapped[list[ChunkEmbedding]] = relationship(
         "ChunkEmbedding", back_populates="chunk", cascade="all, delete-orphan"
     )
@@ -212,6 +230,11 @@ class Chunk(Base):
         Index("ix_chunks_document_id", "document_id"),
         Index("ix_chunks_version_id", "version_id"),
         Index("ix_chunks_checksum", "checksum"),
+        ForeignKeyConstraint(
+            ["document_id", "version_id"],
+            ["document_versions.document_id", "document_versions.version_id"],
+            ondelete="CASCADE",
+        ),
     )
 
 

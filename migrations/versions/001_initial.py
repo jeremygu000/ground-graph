@@ -118,6 +118,11 @@ def upgrade() -> None:
         ),
         sa.ForeignKeyConstraint(["document_id"], ["documents.document_id"], ondelete="RESTRICT"),
         sa.PrimaryKeyConstraint("version_id"),
+        sa.UniqueConstraint(
+            "document_id",
+            "version_id",
+            name="uq_document_versions_document_id_version_id",
+        ),
     )
     op.create_index("ix_document_versions_document_id", "document_versions", ["document_id"])
     op.create_index("ix_document_versions_checksum", "document_versions", ["checksum"])
@@ -132,8 +137,8 @@ def upgrade() -> None:
         "fk_documents_current_version_id_document_versions",
         "documents",
         "document_versions",
-        ["current_version_id"],
-        ["version_id"],
+        ["document_id", "current_version_id"],
+        ["document_id", "version_id"],
         ondelete="SET NULL",
         deferrable=True,
         initially="DEFERRED",
@@ -171,7 +176,9 @@ def upgrade() -> None:
         ),
         sa.ForeignKeyConstraint(["document_id"], ["documents.document_id"], ondelete="RESTRICT"),
         sa.ForeignKeyConstraint(
-            ["version_id"], ["document_versions.version_id"], ondelete="CASCADE"
+            ["document_id", "version_id"],
+            ["document_versions.document_id", "document_versions.version_id"],
+            ondelete="CASCADE",
         ),
         sa.PrimaryKeyConstraint("chunk_id"),
     )

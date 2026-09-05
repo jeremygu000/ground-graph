@@ -123,6 +123,12 @@ class TestDocumentContracts:
         with pytest.raises(ValueError, match="JsonValue"):
             validate_json_value({"blob": b"raw"})
 
+    def test_validate_json_value_allows_shared_containers(self) -> None:
+        shared = [{"name": "shared"}]
+        payload = {"left": shared, "right": shared}
+
+        assert validate_json_value(payload) == payload
+
     def test_parsed_document_rejects_invalid_metadata(self) -> None:
         with pytest.raises(ValueError, match="JsonValue"):
             ParsedDocument(

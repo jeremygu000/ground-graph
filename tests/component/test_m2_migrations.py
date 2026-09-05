@@ -99,7 +99,7 @@ async def _assert_vector_extension(dsn: str) -> bool:
     return vector_ext == "vector"
 
 
-async def _table_schema(dsn: str, table: str) -> tuple[dict[str, Any], list[Any]]:
+async def _table_schema(dsn: str, table: str) -> tuple[dict[str, Any], list[Any], list[Any]]:
     engine = create_async_engine(dsn)
     async with engine.connect() as conn:
         columns = await conn.run_sync(
@@ -110,23 +110,26 @@ async def _table_schema(dsn: str, table: str) -> tuple[dict[str, Any], list[Any]
         foreign_keys = await conn.run_sync(
             lambda sync_conn: inspect(sync_conn).get_foreign_keys(table)
         )
+        unique_constraints = await conn.run_sync(
+            lambda sync_conn: inspect(sync_conn).get_unique_constraints(table)
+        )
     await engine.dispose()
-    return columns, foreign_keys
+    return columns, foreign_keys, unique_constraints
 
 
 def _has_fk(
     foreign_keys: list[Any],
     *,
-    constrained_column: str,
+    constrained_columns: list[str],
     referred_table: str,
     ondelete: str = "RESTRICT",
 ) -> bool:
     for fk in foreign_keys:
-        constrained_columns = fk.get("constrained_columns")
+        local_columns = fk.get("constrained_columns")
         referred = fk.get("referred_table")
         options = fk.get("options") or {}
         if (
-            constrained_columns == [constrained_column]
+            local_columns == constrained_columns
             and referred == referred_table
             and isinstance(options, dict)
             and options.get("ondelete") == ondelete
@@ -181,35 +184,50 @@ async def test_alembic_upgrade_head_on_empty_db(project_root: Path) -> None:
 
     assert await _assert_vector_extension(dsn), "vector extension not created"
 
-    documents_columns, documents_fks = await _table_schema(dsn, "documents")
+    documents_columns, documents_fks, _ = await _table_schema(dsn, "documents")
     assert "tenant_id" not in documents_columns
     assert _has_fk(
         documents_fks,
-        constrained_column="source_id",
+        constrained_columns=["source_id"],
         referred_table="sources",
         ondelete="CASCADE",
     )
+    assert _has_fk(
+        documents_fks,
+        constrained_columns=["document_id", "current_version_id"],
+        referred_table="document_versions",
+        ondelete="SET NULL",
+    )
 
-    document_versions_columns, document_versions_fks = await _table_schema(dsn, "document_versions")
+    (
+        document_versions_columns,
+        document_versions_fks,
+        document_versions_uniques,
+    ) = await _table_schema(dsn, "document_versions")
     assert "doc_metadata" in document_versions_columns
     assert _has_fk(
         document_versions_fks,
-        constrained_column="document_id",
+        constrained_columns=["document_id"],
         referred_table="documents",
         ondelete="RESTRICT",
     )
+    assert any(
+        unique.get("column_names") == ["document_id", "version_id"]
+        and unique.get("name") == "uq_document_versions_document_id_version_id"
+        for unique in document_versions_uniques
+    )
 
-    chunks_columns, chunks_fks = await _table_schema(dsn, "chunks")
+    chunks_columns, chunks_fks, _ = await _table_schema(dsn, "chunks")
     assert {"heading_path", "allowed_principals"}.issubset(chunks_columns)
     assert _has_fk(
         chunks_fks,
-        constrained_column="document_id",
+        constrained_columns=["document_id"],
         referred_table="documents",
         ondelete="RESTRICT",
     )
     assert _has_fk(
         chunks_fks,
-        constrained_column="version_id",
+        constrained_columns=["document_id", "version_id"],
         referred_table="document_versions",
         ondelete="CASCADE",
     )
@@ -219,11 +237,11 @@ async def test_alembic_upgrade_head_on_empty_db(project_root: Path) -> None:
         "outbox status index missing"
     )
 
-    execution_runs_columns, _ = await _table_schema(dsn, "execution_runs")
+    execution_runs_columns, _, _ = await _table_schema(dsn, "execution_runs")
     assert "tenant_id" in execution_runs_columns
     assert not bool(execution_runs_columns["tenant_id"].get("nullable", True))
 
-    outbox_columns, _ = await _table_schema(dsn, "outbox")
+    outbox_columns, _, _ = await _table_schema(dsn, "outbox")
     assert {
         "available_at",
         "claimed_by",

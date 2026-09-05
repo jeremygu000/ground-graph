@@ -55,9 +55,18 @@ class TestModelImports:
         assert source_fk.ondelete == "CASCADE"
 
         current_version_fk = next(
-            fk for fk in Document.__table__.foreign_keys if fk.parent.name == "current_version_id"
+            constraint
+            for constraint in Document.__table__.foreign_key_constraints
+            if constraint.name == "fk_documents_current_version_id_document_versions"
         )
-        assert current_version_fk.column.table.name == "document_versions"
+        assert [column.name for column in current_version_fk.columns] == [
+            "document_id",
+            "current_version_id",
+        ]
+        assert [element.column.table.name for element in current_version_fk.elements] == [
+            "document_versions",
+            "document_versions",
+        ]
         assert current_version_fk.ondelete == "SET NULL"
         assert current_version_fk.deferrable is True
         assert current_version_fk.initially == "DEFERRED"
@@ -71,6 +80,16 @@ class TestModelImports:
         assert "doc_metadata" in columns
         assert "effective_at" in columns
         assert "is_current" in columns
+
+        unique_constraint = next(
+            constraint
+            for constraint in DocumentVersion.__table__.constraints
+            if getattr(constraint, "name", None) == "uq_document_versions_document_id_version_id"
+        )
+        assert [column.name for column in unique_constraint.columns] == [
+            "document_id",
+            "version_id",
+        ]
 
         current_indexes = [
             index
@@ -96,11 +115,17 @@ class TestModelImports:
             fk for fk in Chunk.__table__.foreign_keys if fk.parent.name == "document_id"
         )
         version_fk = next(
-            fk for fk in Chunk.__table__.foreign_keys if fk.parent.name == "version_id"
+            constraint
+            for constraint in Chunk.__table__.foreign_key_constraints
+            if constraint.name is None and len(constraint.columns) == 2
         )
         assert document_fk.column.table.name == "documents"
         assert document_fk.ondelete == "RESTRICT"
-        assert version_fk.column.table.name == "document_versions"
+        assert [column.name for column in version_fk.columns] == ["document_id", "version_id"]
+        assert [element.column.table.name for element in version_fk.elements] == [
+            "document_versions",
+            "document_versions",
+        ]
         assert version_fk.ondelete == "CASCADE"
 
     def test_execution_run_model_has_required_columns(self) -> None:

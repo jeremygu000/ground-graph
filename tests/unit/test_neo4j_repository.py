@@ -82,8 +82,10 @@ class _FakeSessionContext:
 class _FakeDriver:
     def __init__(self, session: _FakeSession) -> None:
         self._session = session
+        self.session_calls = 0
 
     def session(self) -> _FakeSessionContext:
+        self.session_calls += 1
         return _FakeSessionContext(self._session)
 
 
@@ -191,6 +193,76 @@ async def test_create_get_find_entity_and_mention() -> None:
     )
     mentions = await repo.find_mentions(mention.chunk_id)
     assert len(mentions) == 1
+
+
+@pytest.mark.asyncio
+async def test_create_entity_rejects_mutated_attributes() -> None:
+    session = _FakeSession()
+    repo = _repo(session)
+    attributes: dict[str, object] = {"ok": {"nested": "value"}}
+    entity = CanonicalEntity(
+        entity_id=uuid4(),
+        entity_type="Service",
+        canonical_name="API Gateway",
+        aliases=["api"],
+        attributes=attributes,
+    )
+    cast(dict[str, object], entity.attributes["ok"])["blob"] = (1, 2)
+
+    with pytest.raises(ValueError, match="JsonValue"):
+        await repo.create_entity(entity)
+
+    assert session.runs == []
+
+
+@pytest.mark.asyncio
+async def test_bound_transaction_reuses_same_tx_for_update_and_read() -> None:
+    session = _FakeSession()
+    driver = _FakeDriver(session)
+    tx = await session.begin_transaction()
+    repo = Neo4jGraphRepository(cast(Any, driver), tx=cast(Any, tx))
+    fact_id = uuid4()
+    updated_fact = KnowledgeFact(
+        fact_id=fact_id,
+        subject_id=uuid4(),
+        predicate="DEPENDS_ON",
+        object_id=uuid4(),
+        status="verified",
+        confidence=0.8,
+        evidence_ids=[uuid4()],
+        valid_from=datetime.now(UTC),
+        valid_to=None,
+        observed_at=datetime.now(UTC),
+        extraction_method="structured",
+        ontology_version="v1",
+    )
+    session.response = _FakeResult(
+        single_row={
+            "f": {
+                "fact_id": updated_fact.fact_id,
+                "subject_id": updated_fact.subject_id,
+                "predicate": updated_fact.predicate,
+                "object_id": updated_fact.object_id,
+                "status": updated_fact.status,
+                "confidence": updated_fact.confidence,
+                "evidence_ids": updated_fact.evidence_ids,
+                "valid_from": updated_fact.valid_from,
+                "valid_to": updated_fact.valid_to,
+                "observed_at": updated_fact.observed_at,
+                "extraction_method": updated_fact.extraction_method,
+                "ontology_version": updated_fact.ontology_version,
+            }
+        }
+    )
+
+    result = await repo.update_fact_status(fact_id, "verified")
+
+    assert result.status == "verified"
+    assert driver.session_calls == 0
+    assert session.commits == 0
+    assert len(session.runs) == 2
+    assert session.runs[0][0].strip().startswith("MATCH (f:Fact")
+    assert session.runs[1][0].strip().startswith("MATCH (f:Fact")
 
 
 @pytest.mark.asyncio

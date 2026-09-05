@@ -12,6 +12,7 @@ from uuid import UUID
 from neo4j import AsyncDriver
 
 from groundgraph.domain.knowledge import CanonicalEntity, EntityMention, KnowledgeFact
+from groundgraph.domain.types import validate_json_value
 
 _ENTITY_MERGE: LiteralString = """
 MERGE (e:Entity {entity_id: $entity_id})
@@ -119,50 +120,57 @@ def _dict_to_fact(node: dict[str, Any]) -> KnowledgeFact:
 class Neo4jGraphRepository:
     """Neo4j implementation of GraphRepository port."""
 
-    def __init__(self, driver: AsyncDriver) -> None:
+    def __init__(self, driver: AsyncDriver, tx: Any | None = None) -> None:
         self._driver = driver
+        self._tx = tx
 
-    async def create_entity(
-        self, entity: CanonicalEntity, _tx: Any | None = None
-    ) -> CanonicalEntity:
-        cypher = _ENTITY_MERGE
+    async def _run_read(self, cypher: str, **params: Any) -> Any:
+        if self._tx is not None:
+            return await self._tx.run(cypher, **params)
+        async with cast(Any, self._driver.session()) as session:
+            return await session.run(cypher, **params)
+
+    async def _run_write(self, cypher: str, **params: Any) -> None:
+        if self._tx is not None:
+            await self._tx.run(cypher, **params)
+            return
+        async with (
+            cast(Any, self._driver.session()) as session,
+            await session.begin_transaction() as tx,
+        ):
+            await tx.run(cypher, **params)
+            await tx.commit()
+
+    async def create_entity(self, entity: CanonicalEntity) -> CanonicalEntity:
         params: dict[str, Any] = {
             "entity_id": str(entity.entity_id),
             "entity_type": entity.entity_type,
             "canonical_name": entity.canonical_name,
             "aliases": entity.aliases,
-            "attributes": json.dumps(entity.attributes) if entity.attributes else "{}",
+            "attributes": json.dumps(validate_json_value(entity.attributes))
+            if entity.attributes
+            else "{}",
         }
-        if _tx is not None:
-            await _tx.run(cypher, **params)
-        else:
-            async with (
-                cast(Any, self._driver.session()) as session,
-                await session.begin_transaction() as tx,
-            ):
-                await tx.run(cypher, **params)
-                await tx.commit()
+        await self._run_write(_ENTITY_MERGE, **params)
         return entity
 
     async def get_entity(self, entity_id: UUID) -> CanonicalEntity | None:
         cypher = "MATCH (e:Entity {entity_id: $entity_id}) RETURN e"
-        async with cast(Any, self._driver.session()) as session:
-            result = await session.run(cypher, entity_id=str(entity_id))
-            record = await result.single()
-            if not record:
-                return None
-            return _dict_to_entity(record)
+        result = await self._run_read(cypher, entity_id=str(entity_id))
+        record = await result.single()
+        if not record:
+            return None
+        return _dict_to_entity(record)
 
     async def find_entities(
         self, canonical_name: str | None = None, entity_type: str | None = None
     ) -> list[CanonicalEntity]:
         params: dict[str, Any] = {"canonical_name": canonical_name, "entity_type": entity_type}
-        async with cast(Any, self._driver.session()) as session:
-            result = await session.run(_ENTITY_FIND, **params)
-            records = await result.data()
-            return [_dict_to_entity(r) for r in records]
+        result = await self._run_read(_ENTITY_FIND, **params)
+        records = await result.data()
+        return [_dict_to_entity(r) for r in records]
 
-    async def create_fact(self, fact: KnowledgeFact, _tx: Any | None = None) -> KnowledgeFact:
+    async def create_fact(self, fact: KnowledgeFact) -> KnowledgeFact:
         params: dict[str, Any] = {
             "fact_id": str(fact.fact_id),
             "subject_id": str(fact.subject_id),
@@ -177,25 +185,16 @@ class Neo4jGraphRepository:
             "extraction_method": fact.extraction_method,
             "ontology_version": fact.ontology_version,
         }
-        if _tx is not None:
-            await _tx.run(_FACT_MERGE, **params)
-        else:
-            async with (
-                cast(Any, self._driver.session()) as session,
-                await session.begin_transaction() as tx,
-            ):
-                await tx.run(_FACT_MERGE, **params)
-                await tx.commit()
+        await self._run_write(_FACT_MERGE, **params)
         return fact
 
     async def get_fact(self, fact_id: UUID) -> KnowledgeFact | None:
         cypher = "MATCH (f:Fact {fact_id: $fact_id}) RETURN f"
-        async with cast(Any, self._driver.session()) as session:
-            result = await session.run(cypher, fact_id=str(fact_id))
-            record = await result.single()
-            if not record:
-                return None
-            return _dict_to_fact(record["f"])
+        result = await self._run_read(cypher, fact_id=str(fact_id))
+        record = await result.single()
+        if not record:
+            return None
+        return _dict_to_fact(record["f"])
 
     async def find_facts(
         self,
@@ -226,38 +225,28 @@ class Neo4jGraphRepository:
         RETURN f
         LIMIT 100
         """
-        async with cast(Any, self._driver.session()) as session:
-            result = await session.run(cypher, **params)  # pyright: ignore[reportArgumentType]
-            records = await result.data()
-            return [_dict_to_fact(r["f"]) for r in records]
+        result = await self._run_read(cypher, **params)  # pyright: ignore[reportArgumentType]
+        records = await result.data()
+        return [_dict_to_fact(r["f"]) for r in records]
 
     async def update_fact_status(
         self,
         fact_id: UUID,
         status: str,
         superseded_by: UUID | None = None,
-        _tx: Any | None = None,
     ) -> KnowledgeFact:
         params: dict[str, Any] = {
             "fact_id": str(fact_id),
             "status": status,
             "superseded_by": str(superseded_by) if superseded_by else None,
         }
-        if _tx is not None:
-            await _tx.run(_FACT_UPDATE_STATUS, **params)
-        else:
-            async with (
-                cast(Any, self._driver.session()) as session,
-                await session.begin_transaction() as tx,
-            ):
-                await tx.run(_FACT_UPDATE_STATUS, **params)
-                await tx.commit()
+        await self._run_write(_FACT_UPDATE_STATUS, **params)
         fact = await self.get_fact(fact_id)
         if not fact:
             raise ValueError(f"Fact {fact_id} not found after status update")
         return fact
 
-    async def create_mention(self, mention: EntityMention, _tx: Any | None = None) -> EntityMention:
+    async def create_mention(self, mention: EntityMention) -> EntityMention:
         params: dict[str, Any] = {
             "mention_id": str(mention.mention_id),
             "chunk_id": str(mention.chunk_id),
@@ -266,15 +255,7 @@ class Neo4jGraphRepository:
             "locator": mention.locator,
             "extraction_confidence": mention.extraction_confidence,
         }
-        if _tx is not None:
-            await _tx.run(_MENTION_MERGE, **params)
-        else:
-            async with (
-                cast(Any, self._driver.session()) as session,
-                await session.begin_transaction() as tx,
-            ):
-                await tx.run(_MENTION_MERGE, **params)
-                await tx.commit()
+        await self._run_write(_MENTION_MERGE, **params)
         return mention
 
     async def find_mentions(self, chunk_id: UUID) -> list[EntityMention]:
@@ -282,17 +263,16 @@ class Neo4jGraphRepository:
         MATCH (m:Mention)-[:MENTIONED_IN]->(c:Chunk {chunk_id: $chunk_id})
         RETURN m
         """
-        async with cast(Any, self._driver.session()) as session:
-            result = await session.run(cypher, chunk_id=str(chunk_id))
-            records = await result.data()
-            return [
-                EntityMention(
-                    mention_id=r["m"]["mention_id"],
-                    chunk_id=r["m"]["chunk_id"],
-                    surface_form=r["m"]["surface_form"],
-                    candidate_type=r["m"]["candidate_type"],
-                    locator=r["m"].get("locator"),
-                    extraction_confidence=r["m"]["extraction_confidence"],
-                )
-                for r in records
-            ]
+        result = await self._run_read(cypher, chunk_id=str(chunk_id))
+        records = await result.data()
+        return [
+            EntityMention(
+                mention_id=r["m"]["mention_id"],
+                chunk_id=r["m"]["chunk_id"],
+                surface_form=r["m"]["surface_form"],
+                candidate_type=r["m"]["candidate_type"],
+                locator=r["m"].get("locator"),
+                extraction_confidence=r["m"]["extraction_confidence"],
+            )
+            for r in records
+        ]

@@ -14,15 +14,20 @@ from uuid import uuid4
 import pytest
 from neo4j import AsyncGraphDatabase
 from sqlalchemy import delete, select, text, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from groundgraph.domain.documents import Chunk, ParsedDocument, SourceDescriptor
 from groundgraph.domain.execution import ExecutionRun, ExecutionRunStatus
 from groundgraph.domain.knowledge import CanonicalEntity, KnowledgeFact
 from groundgraph.infrastructure.neo4j.repository import Neo4jGraphRepository
+from groundgraph.infrastructure.neo4j.unit_of_work import Neo4jUnitOfWork
 from groundgraph.infrastructure.postgres.document_repository import PostgresDocumentRepository
 from groundgraph.infrastructure.postgres.models import (
     Base as PostgresBase,
+)
+from groundgraph.infrastructure.postgres.models import (
+    Chunk as SqlChunk,
 )
 from groundgraph.infrastructure.postgres.models import (
     Document as SqlDocument,
@@ -346,6 +351,64 @@ async def test_document_version_lifecycle_and_delete(postgres_component: Any) ->
         assert v2_row.is_current is False
 
 
+async def test_document_current_version_must_belong_to_same_document(
+    postgres_component: Any,
+) -> None:
+    async with (
+        _setup_postgres(postgres_component.dsn) as session_factory,
+        session_factory() as session,
+    ):
+        repo = PostgresDocumentRepository(cast(PostgresSession, session))
+
+        source = SourceDescriptor(
+            source_id=uuid4(),
+            source_type="filesystem",
+            uri="/docs",
+            classification="internal",
+            tenant_id="tenant-a",
+        )
+        await repo.create_source(source)
+
+        doc_a = ParsedDocument(
+            document_id=uuid4(),
+            version_id=uuid4(),
+            source_id=source.source_id,
+            title="Doc A",
+            media_type="text/markdown",
+            checksum="checksum-a",
+            content="# A",
+            metadata={"revision": 1},
+            effective_at=datetime(2024, 1, 1, tzinfo=UTC),
+        )
+        doc_b = ParsedDocument(
+            document_id=uuid4(),
+            version_id=uuid4(),
+            source_id=source.source_id,
+            title="Doc B",
+            media_type="text/markdown",
+            checksum="checksum-b",
+            content="# B",
+            metadata={"revision": 1},
+            effective_at=datetime(2024, 1, 2, tzinfo=UTC),
+        )
+        await repo.create_document(doc_a)
+        await repo.create_document(doc_b)
+        await session.commit()
+
+        await session.execute(
+            update(SqlDocument)
+            .where(SqlDocument.document_id == doc_a.document_id)
+            .values(current_version_id=doc_b.version_id)
+        )
+        with pytest.raises(IntegrityError):
+            await session.commit()
+        await session.rollback()
+
+        restored = await session.get(SqlDocument, doc_a.document_id)
+        assert restored is not None
+        assert restored.current_version_id == doc_a.version_id
+
+
 async def test_chunk_lifecycle_and_listing(postgres_component: Any) -> None:
     async with (
         _setup_postgres(postgres_component.dsn) as session_factory,
@@ -413,6 +476,67 @@ async def test_chunk_lifecycle_and_listing(postgres_component: Any) -> None:
         assert await repo.get_chunk(uuid4()) is None
 
 
+async def test_chunk_version_must_belong_to_same_document(postgres_component: Any) -> None:
+    async with (
+        _setup_postgres(postgres_component.dsn) as session_factory,
+        session_factory() as session,
+    ):
+        repo = PostgresDocumentRepository(cast(PostgresSession, session))
+
+        source = SourceDescriptor(
+            source_id=uuid4(),
+            source_type="filesystem",
+            uri="/docs",
+            classification="internal",
+            tenant_id="tenant-a",
+        )
+        await repo.create_source(source)
+
+        doc_a = ParsedDocument(
+            document_id=uuid4(),
+            version_id=uuid4(),
+            source_id=source.source_id,
+            title="Doc A",
+            media_type="text/markdown",
+            checksum="checksum-a",
+            content="# A",
+            metadata={"revision": 1},
+            effective_at=datetime(2024, 1, 1, tzinfo=UTC),
+        )
+        doc_b = ParsedDocument(
+            document_id=uuid4(),
+            version_id=uuid4(),
+            source_id=source.source_id,
+            title="Doc B",
+            media_type="text/markdown",
+            checksum="checksum-b",
+            content="# B",
+            metadata={"revision": 1},
+            effective_at=datetime(2024, 1, 2, tzinfo=UTC),
+        )
+        await repo.create_document(doc_a)
+        await repo.create_document(doc_b)
+        await session.commit()
+
+        bad_chunk = SqlChunk(
+            chunk_id=uuid4(),
+            document_id=doc_a.document_id,
+            version_id=doc_b.version_id,
+            ordinal=0,
+            heading_path=["Intro"],
+            content="Mismatch",
+            token_count=1,
+            checksum="mismatch",
+            allowed_principals=["engineering"],
+        )
+        session.add(bad_chunk)
+        with pytest.raises(IntegrityError):
+            await session.commit()
+        await session.rollback()
+
+        assert await session.get(SqlChunk, bad_chunk.chunk_id) is None
+
+
 async def test_document_version_cascade(postgres_component: Any) -> None:
     async with (
         _setup_postgres(postgres_component.dsn) as session_factory,
@@ -477,8 +601,6 @@ async def test_entity_create_and_fetch(neo4j_component: Any) -> None:
         neo4j_component.uri, auth=(neo4j_component.user, neo4j_component.password)
     )
     try:
-        repo = Neo4jGraphRepository(driver)
-
         entity = CanonicalEntity(
             entity_id=uuid4(),
             entity_type="Service",
@@ -489,8 +611,12 @@ async def test_entity_create_and_fetch(neo4j_component: Any) -> None:
                 "owner": {"team": "platform", "contacts": ["alice", "bob"]},
             },
         )
-        await repo.create_entity(entity)
+        async with Neo4jUnitOfWork(driver) as uow:
+            repo = uow.graph
+            assert repo is not None
+            await repo.create_entity(entity)
 
+        repo = Neo4jGraphRepository(driver)
         result = await repo.get_entity(entity.entity_id)
         assert result is not None
         assert result.canonical_name == "API Gateway"
@@ -508,8 +634,6 @@ async def test_fact_create_and_fetch(neo4j_component: Any) -> None:
         neo4j_component.uri, auth=(neo4j_component.user, neo4j_component.password)
     )
     try:
-        repo = Neo4jGraphRepository(driver)
-
         subject = CanonicalEntity(
             entity_id=uuid4(),
             entity_type="Service",
@@ -524,9 +648,6 @@ async def test_fact_create_and_fetch(neo4j_component: Any) -> None:
             aliases=[],
             attributes={},
         )
-        await repo.create_entity(subject)
-        await repo.create_entity(obj)
-
         valid_from = datetime(2024, 1, 1, tzinfo=UTC)
         valid_to = datetime(2024, 12, 31, tzinfo=UTC)
         fact = KnowledgeFact(
@@ -543,8 +664,14 @@ async def test_fact_create_and_fetch(neo4j_component: Any) -> None:
             extraction_method="structured",
             ontology_version="v0.1.0",
         )
-        await repo.create_fact(fact)
+        async with Neo4jUnitOfWork(driver) as uow:
+            repo = uow.graph
+            assert repo is not None
+            await repo.create_entity(subject)
+            await repo.create_entity(obj)
+            await repo.create_fact(fact)
 
+        repo = Neo4jGraphRepository(driver)
         result = await repo.get_fact(fact.fact_id)
         assert result is not None
         assert result.predicate == "DEPENDS_ON"
@@ -560,8 +687,6 @@ async def test_find_entities_returns_entity(neo4j_component: Any) -> None:
         neo4j_component.uri, auth=(neo4j_component.user, neo4j_component.password)
     )
     try:
-        repo = Neo4jGraphRepository(driver)
-
         entity = CanonicalEntity(
             entity_id=uuid4(),
             entity_type="Service",
@@ -569,8 +694,12 @@ async def test_find_entities_returns_entity(neo4j_component: Any) -> None:
             aliases=["findme"],
             attributes={"env": "prod"},
         )
-        await repo.create_entity(entity)
+        async with Neo4jUnitOfWork(driver) as uow:
+            repo = uow.graph
+            assert repo is not None
+            await repo.create_entity(entity)
 
+        repo = Neo4jGraphRepository(driver)
         results = await repo.find_entities(canonical_name="FindMe Service")
         assert len(results) == 1
         assert results[0].canonical_name == "FindMe Service"
@@ -584,8 +713,6 @@ async def test_find_facts_datetime_conversion(neo4j_component: Any) -> None:
         neo4j_component.uri, auth=(neo4j_component.user, neo4j_component.password)
     )
     try:
-        repo = Neo4jGraphRepository(driver)
-
         subject = CanonicalEntity(
             entity_id=uuid4(),
             entity_type="Service",
@@ -600,9 +727,6 @@ async def test_find_facts_datetime_conversion(neo4j_component: Any) -> None:
             aliases=[],
             attributes={},
         )
-        await repo.create_entity(subject)
-        await repo.create_entity(obj)
-
         valid_from = datetime(2024, 1, 1, tzinfo=UTC)
         valid_to = datetime(2024, 12, 31, tzinfo=UTC)
         observed = datetime(2024, 6, 15, tzinfo=UTC)
@@ -620,8 +744,14 @@ async def test_find_facts_datetime_conversion(neo4j_component: Any) -> None:
             extraction_method="llm",
             ontology_version="v0.1.0",
         )
-        await repo.create_fact(fact)
+        async with Neo4jUnitOfWork(driver) as uow:
+            repo = uow.graph
+            assert repo is not None
+            await repo.create_entity(subject)
+            await repo.create_entity(obj)
+            await repo.create_fact(fact)
 
+        repo = Neo4jGraphRepository(driver)
         results = await repo.find_facts(subject_id=subject.entity_id)
         assert len(results) == 1
         result = results[0]
