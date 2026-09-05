@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 import secrets
 from contextlib import suppress
+from typing import Any, cast
 
-import asyncpg
+import asyncpg  # pyright: ignore[reportMissingTypeStubs]
 import httpx
 from neo4j import AsyncGraphDatabase
 
@@ -43,15 +44,18 @@ class PostgresHealthChecker:
     name = "postgres"
 
     async def check(self) -> DependencyHealth:
-        conn: asyncpg.Connection | None = None
+        conn: Any | None = None
         try:
             async with asyncio.timeout(2):
-                conn = await asyncpg.connect(
-                    host=self._host,
-                    port=self._port,
-                    user=self._user,
-                    password=self._password,
-                    database=self._database,
+                conn = cast(
+                    Any,
+                    await asyncpg.connect(  # pyright: ignore[reportUnknownMemberType]
+                        host=self._host,
+                        port=self._port,
+                        user=self._user,
+                        password=self._password,
+                        database=self._database,
+                    ),
                 )
                 assert conn is not None
                 await conn.execute("SELECT 1")
@@ -86,14 +90,14 @@ class Neo4jHealthChecker:
 
     async def check(self) -> DependencyHealth:
         try:
-            driver = AsyncGraphDatabase.driver(
+            driver = AsyncGraphDatabase.driver(  # pyright: ignore[reportUnknownMemberType]
                 self._uri,
                 auth=(self._user, self._password),
                 max_connection_pool_size=1,
                 connection_timeout=2.0,
             )
             try:
-                async with driver.session() as session:
+                async with driver.session() as session:  # pyright: ignore[reportUnknownMemberType]
                     await session.run("RETURN 1")
             finally:
                 await driver.close()

@@ -1,0 +1,113 @@
+"""M2 SQLAlchemy model import and definition tests.
+
+Tests that SQLAlchemy models can be imported and have correct table/column definitions.
+Full CRUD tests require Docker/Testcontainers (see tests/component/).
+"""
+
+from __future__ import annotations
+
+from groundgraph.infrastructure.postgres.models import (
+    Chunk,
+    Document,
+    DocumentVersion,
+    ExecutionRun,
+    IndexVersion,
+    ModelConfigVersion,
+    Outbox,
+    PromptVersion,
+    Source,
+)
+
+
+class TestModelImports:
+    def test_all_models_importable(self) -> None:
+        assert Source.__tablename__ == "sources"
+        assert Document.__tablename__ == "documents"
+        assert DocumentVersion.__tablename__ == "document_versions"
+        assert Chunk.__tablename__ == "chunks"
+        assert ExecutionRun.__tablename__ == "execution_runs"
+        assert Outbox.__tablename__ == "outbox"
+        assert PromptVersion.__tablename__ == "prompt_versions"
+        assert ModelConfigVersion.__tablename__ == "model_config_versions"
+        assert IndexVersion.__tablename__ == "index_versions"
+
+    def test_source_model_has_required_columns(self) -> None:
+        columns = {c.name for c in Source.__table__.columns}
+        assert "source_id" in columns
+        assert "source_type" in columns
+        assert "uri" in columns
+        assert "classification" in columns
+        assert "allowed_principals" in columns
+        assert "created_at" in columns
+
+    def test_document_model_has_required_columns(self) -> None:
+        columns = {c.name for c in Document.__table__.columns}
+        assert "document_id" in columns
+        assert "source_id" in columns
+        assert "title" in columns
+        assert "media_type" in columns
+        assert "current_version_id" in columns
+
+    def test_document_version_model_has_doc_metadata(self) -> None:
+        columns = {c.name for c in DocumentVersion.__table__.columns}
+        assert "version_id" in columns
+        assert "document_id" in columns
+        assert "checksum" in columns
+        assert "content" in columns
+        assert "doc_metadata" in columns
+        assert "effective_at" in columns
+        assert "is_current" in columns
+
+    def test_chunk_model_has_required_columns(self) -> None:
+        columns = {c.name for c in Chunk.__table__.columns}
+        assert "chunk_id" in columns
+        assert "document_id" in columns
+        assert "version_id" in columns
+        assert "ordinal" in columns
+        assert "heading_path" in columns
+        assert "content" in columns
+        assert "token_count" in columns
+        assert "checksum" in columns
+        assert "allowed_principals" in columns
+
+    def test_execution_run_model_has_required_columns(self) -> None:
+        columns = {c.name for c in ExecutionRun.__table__.columns}
+        assert "run_id" in columns
+        assert "workflow" in columns
+        assert "status" in columns
+        assert "principal" in columns
+        assert "tenant_id" in columns
+        assert "input" in columns
+        assert "output" in columns
+        assert "started_at" in columns
+        assert "finished_at" in columns
+
+    def test_outbox_model_has_required_columns(self) -> None:
+        columns = {c.name for c in Outbox.__table__.columns}
+        assert "event_id" in columns
+        assert "aggregate_type" in columns
+        assert "aggregate_id" in columns
+        assert "event_type" in columns
+        assert "payload" in columns
+        assert "status" in columns
+        assert "attempts" in columns
+        assert "last_error" in columns
+        assert "created_at" in columns
+
+    def test_prompt_version_unique_constraint(self) -> None:
+        assert any(
+            "bundle_id" in str(c) and "version" in str(c)
+            for c in PromptVersion.__table__.constraints
+        )
+
+    def test_model_config_version_unique_constraint(self) -> None:
+        assert any(
+            "config_key" in str(c) and "version" in str(c)
+            for c in ModelConfigVersion.__table__.constraints
+        )
+
+    def test_index_version_unique_constraint(self) -> None:
+        assert any(
+            "index_name" in str(c) and "version" in str(c)
+            for c in IndexVersion.__table__.constraints
+        )

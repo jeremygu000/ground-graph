@@ -88,6 +88,7 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["PLR2004", "S101", "ARG"]
 "**/__init__.py" = ["F401"]
+"migrations/**/*.py" = ["PLR0915"]
 
 [tool.ruff.format]
 quote-style = "double"

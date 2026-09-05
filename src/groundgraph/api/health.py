@@ -25,9 +25,15 @@ class PublicDependencyHealth(BaseModel):
     reason_code: str
 
 
+def _empty_public_dependency_health_list() -> list[PublicDependencyHealth]:
+    return []
+
+
 class HealthResponse(BaseModel):
     status: str
-    dependencies: list[PublicDependencyHealth] = Field(default_factory=list)
+    dependencies: list[PublicDependencyHealth] = Field(
+        default_factory=_empty_public_dependency_health_list
+    )
 
 
 @router.get("/health/live", response_model=HealthResponse)

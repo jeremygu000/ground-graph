@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
+from typing import cast
 
 import structlog
 from fastapi import FastAPI, Request, Response
@@ -65,15 +66,12 @@ def _server_request_hook(span: Span, scope: dict[str, object]) -> None:
     """Attach safe, stable request metadata to the instrumented server span."""
 
     raw_headers = scope.get("headers", [])
-    headers = (
-        [
-            (key, value)
-            for key, value in raw_headers
-            if isinstance(key, bytes) and isinstance(value, bytes)
-        ]
-        if isinstance(raw_headers, list)
-        else []
-    )
+    headers: list[tuple[bytes, bytes]] = []
+    if isinstance(raw_headers, list):
+        for item in cast(list[tuple[object, object]], raw_headers):
+            key, value = item
+            if isinstance(key, bytes) and isinstance(value, bytes):
+                headers.append((key, value))
     request_id = request_id_from_headers(headers)
     state = scope.get("state")
     if not isinstance(state, dict):

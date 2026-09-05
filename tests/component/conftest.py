@@ -34,6 +34,10 @@ from collections.abc import Generator
 from dataclasses import dataclass
 
 import pytest
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+from groundgraph.infrastructure.postgres.models import Base
 
 # Pinned image versions — MUST match docker-compose.yml so component
 # tests exercise the same engine as the stack smoke tests.
@@ -151,6 +155,30 @@ def postgres_component(docker_available: bool) -> Generator[PostgresComponent, N
         yield comp
     finally:
         container.stop()
+
+
+@pytest.fixture(scope="session")
+async def postgres(postgres_component: PostgresComponent) -> dict[str, object]:
+    """PostgresComponent with schema migrated.
+
+    Creates all tables via SQLAlchemy Base.metadata.create_all once per session,
+    then yields a dict with:
+    - ``dsn``: the async SQLAlchemy connection string
+    - ``session``: an async session factory (async_sessionmaker)
+    This lets tests use the full schema without managing migrations.
+    """
+    async_engine = create_async_engine(postgres_component.dsn)
+
+    async with async_engine.begin() as conn:
+        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        await conn.run_sync(Base.metadata.create_all)
+
+    async_session_factory = async_sessionmaker(async_engine, expire_on_commit=False)
+
+    return {
+        "dsn": postgres_component.dsn,
+        "session": async_session_factory,
+    }
 
 
 @pytest.fixture(scope="session")
