@@ -143,3 +143,28 @@ async def test_uow_explicit_rollback_does_not_finalize_twice() -> None:
     assert session.tx.commit_calls == 0
     assert session.tx.rollback_calls == 1
     assert session.close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_uow_invalidates_repository_after_explicit_commit() -> None:
+    session = _FakeSession()
+    driver = _FakeDriver(session)
+
+    async with Neo4jUnitOfWork(cast(Any, driver), database="neo4j-test") as uow:
+        repo = uow.graph
+        assert repo is not None
+        await uow.commit()
+        with pytest.raises(RuntimeError, match="Neo4j transaction is no longer active"):
+            await repo.create_entity(
+                CanonicalEntity(
+                    entity_id=uuid4(),
+                    entity_type="Service",
+                    canonical_name="API",
+                    aliases=[],
+                    attributes={},
+                )
+            )
+
+    assert session.tx.commit_calls == 1
+    assert session.tx.rollback_calls == 0
+    assert session.close_calls == 1

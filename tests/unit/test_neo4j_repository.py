@@ -89,14 +89,25 @@ class _FakeDriver:
     def __init__(self, session: _FakeSession) -> None:
         self._session = session
         self.session_calls = 0
+        self.database_args: list[str | None] = []
 
-    def session(self) -> _FakeSessionContext:
+    def session(self, database: str | None = None) -> _FakeSessionContext:
         self.session_calls += 1
+        self.database_args.append(database)
         return _FakeSessionContext(self._session)
 
 
-def _repo(session: _FakeSession) -> Neo4jGraphRepository:
-    return Neo4jGraphRepository(cast(Any, _FakeDriver(session)))
+def _repo(
+    session: _FakeSession,
+    *,
+    tx: _FakeTx | None = None,
+    database: str = "neo4j-test",
+) -> Neo4jGraphRepository:
+    return Neo4jGraphRepository(
+        cast(Any, _FakeDriver(session)),
+        tx=cast(Any, tx),
+        database=database,
+    )
 
 
 def test_helper_functions_round_trip() -> None:
@@ -137,7 +148,8 @@ def test_helper_functions_round_trip() -> None:
 @pytest.mark.asyncio
 async def test_create_get_find_entity_and_mention() -> None:
     session = _FakeSession()
-    repo = _repo(session)
+    tx = await session.begin_transaction()
+    repo = _repo(session, tx=tx)
     entity = CanonicalEntity(
         entity_id=uuid4(),
         entity_type="Service",
@@ -147,6 +159,7 @@ async def test_create_get_find_entity_and_mention() -> None:
     )
 
     await repo.create_entity(entity)
+    await tx.commit()
     session.response = _FakeResult(
         single_row={
             "e": {
@@ -182,7 +195,10 @@ async def test_create_get_find_entity_and_mention() -> None:
         candidate_type="Service",
         extraction_confidence=0.9,
     )
+    tx = await session.begin_transaction()
+    repo = _repo(session, tx=tx)
     await repo.create_mention(mention)
+    await tx.commit()
     session.response = _FakeResult(
         data_rows=[
             {
@@ -221,12 +237,47 @@ async def test_create_entity_rejects_mutated_attributes() -> None:
     assert session.runs == []
 
 
+def test_standalone_repo_reads_use_configured_database(monkeypatch: pytest.MonkeyPatch) -> None:
+    session = _FakeSession()
+    driver = _FakeDriver(session)
+
+    class _Settings:
+        neo4j_database = "neo4j-test"
+
+    def _get_settings() -> _Settings:
+        return _Settings()
+
+    monkeypatch.setattr(
+        "groundgraph.infrastructure.neo4j.repository.get_settings",
+        _get_settings,
+    )
+    repo = Neo4jGraphRepository(cast(Any, driver))
+    assert repo._database == "neo4j-test"
+
+
+@pytest.mark.asyncio
+async def test_standalone_repo_writes_require_uow() -> None:
+    session = _FakeSession()
+    repo = _repo(session)
+
+    entity = CanonicalEntity(
+        entity_id=uuid4(),
+        entity_type="Service",
+        canonical_name="API Gateway",
+        aliases=["api"],
+        attributes={},
+    )
+
+    with pytest.raises(RuntimeError, match="Neo4j writes require Neo4jUnitOfWork"):
+        await repo.create_entity(entity)
+
+
 @pytest.mark.asyncio
 async def test_bound_transaction_reuses_same_tx_for_update_and_read() -> None:
     session = _FakeSession()
     driver = _FakeDriver(session)
     tx = await session.begin_transaction()
-    repo = Neo4jGraphRepository(cast(Any, driver), tx=cast(Any, tx))
+    repo = Neo4jGraphRepository(cast(Any, driver), tx=cast(Any, tx), database="neo4j-test")
     fact_id = uuid4()
     updated_fact = KnowledgeFact(
         fact_id=fact_id,
@@ -274,7 +325,6 @@ async def test_bound_transaction_reuses_same_tx_for_update_and_read() -> None:
 @pytest.mark.asyncio
 async def test_create_get_find_fact_and_status_update() -> None:
     session = _FakeSession()
-    repo = _repo(session)
     subject = uuid4()
     obj = uuid4()
     valid_from = datetime.now(UTC)
@@ -293,7 +343,10 @@ async def test_create_get_find_fact_and_status_update() -> None:
         ontology_version="v1",
     )
 
+    tx = await session.begin_transaction()
+    repo = _repo(session, tx=tx)
     await repo.create_fact(fact)
+    await tx.commit()
     session.response = _FakeResult(
         single_row={
             "f": {
@@ -336,6 +389,8 @@ async def test_create_get_find_fact_and_status_update() -> None:
     )
     assert len(await repo.find_facts(subject_id=subject, predicate="DEPENDS_ON")) == 1
 
+    tx = await session.begin_transaction()
+    repo = _repo(session, tx=tx)
     session.response = _FakeResult(
         single_row={
             "f": {
@@ -356,3 +411,4 @@ async def test_create_get_find_fact_and_status_update() -> None:
     )
     updated = await repo.update_fact_status(fact.fact_id, "verified")
     assert updated.status == "verified"
+    await tx.commit()

@@ -6,11 +6,13 @@ Implements the GraphRepository port for Neo4j using the official async driver.
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from typing import Any, LiteralString, cast
 from uuid import UUID
 
 from neo4j import AsyncDriver
 
+from groundgraph.application.settings import get_settings
 from groundgraph.domain.knowledge import CanonicalEntity, EntityMention, KnowledgeFact
 from groundgraph.domain.types import validate_json_value
 
@@ -79,6 +81,11 @@ RETURN m
 """
 
 
+@dataclass
+class _TxLifecycle:
+    active: bool = True
+
+
 def _dict_to_entity(record: Any) -> CanonicalEntity:
     raw = record.data() if hasattr(record, "data") else record
     node = raw.get("e", raw)
@@ -120,15 +127,28 @@ def _dict_to_fact(node: dict[str, Any]) -> KnowledgeFact:
 class Neo4jGraphRepository:
     """Neo4j implementation of GraphRepository port."""
 
-    def __init__(self, driver: AsyncDriver, tx: Any | None = None) -> None:
+    def __init__(
+        self,
+        driver: AsyncDriver,
+        tx: Any | None = None,
+        database: str | None = None,
+        tx_lifecycle: _TxLifecycle | None = None,
+    ) -> None:
         self._driver = driver
         self._tx = tx
+        self._database = database or get_settings().neo4j_database
+        self._tx_lifecycle = tx_lifecycle
+
+    def _ensure_tx_active(self) -> None:
+        if self._tx_lifecycle is not None and not self._tx_lifecycle.active:
+            raise RuntimeError("Neo4j transaction is no longer active")
 
     async def _run_read_single(self, cypher: str, **params: Any) -> Any:
         if self._tx is not None:
+            self._ensure_tx_active()
             result = await self._tx.run(cypher, **params)
             return await result.single()
-        async with cast(Any, self._driver.session()) as session:
+        async with cast(Any, self._driver.session(database=self._database)) as session:
 
             async def _read(tx: Any) -> Any:
                 result = await tx.run(cypher, **params)
@@ -138,9 +158,10 @@ class Neo4jGraphRepository:
 
     async def _run_read_data(self, cypher: str, **params: Any) -> list[dict[str, Any]]:
         if self._tx is not None:
+            self._ensure_tx_active()
             result = await self._tx.run(cypher, **params)
             return await result.data()
-        async with cast(Any, self._driver.session()) as session:
+        async with cast(Any, self._driver.session(database=self._database)) as session:
 
             async def _read(tx: Any) -> list[dict[str, Any]]:
                 result = await tx.run(cypher, **params)
@@ -150,14 +171,10 @@ class Neo4jGraphRepository:
 
     async def _run_write(self, cypher: str, **params: Any) -> None:
         if self._tx is not None:
+            self._ensure_tx_active()
             await self._tx.run(cypher, **params)
             return
-        async with cast(Any, self._driver.session()) as session:
-
-            async def _write(tx: Any) -> None:
-                await tx.run(cypher, **params)
-
-            await session.execute_write(_write)
+        raise RuntimeError("Neo4j writes require Neo4jUnitOfWork")
 
     async def create_entity(self, entity: CanonicalEntity) -> CanonicalEntity:
         params: dict[str, Any] = {

@@ -7,7 +7,7 @@ from typing import Any, Self, cast
 from neo4j import AsyncDriver
 
 from groundgraph.application.settings import get_settings
-from groundgraph.infrastructure.neo4j.repository import Neo4jGraphRepository
+from groundgraph.infrastructure.neo4j.repository import Neo4jGraphRepository, _TxLifecycle
 
 
 class Neo4jUnitOfWork:
@@ -23,6 +23,7 @@ class Neo4jUnitOfWork:
         self._session: Any | None = None
         self._tx: Any | None = None
         self._finished = False
+        self._tx_lifecycle = _TxLifecycle()
         self.graph: Neo4jGraphRepository | None = None
 
     async def __aenter__(self) -> Self:
@@ -30,7 +31,10 @@ class Neo4jUnitOfWork:
         self._session = session
         self._tx = await session.begin_transaction()
         self._finished = False
-        self.graph = Neo4jGraphRepository(self._driver, tx=self._tx)
+        self._tx_lifecycle.active = True
+        self.graph = Neo4jGraphRepository(
+            self._driver, tx=self._tx, database=self._database, tx_lifecycle=self._tx_lifecycle
+        )
         return self
 
     async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
@@ -43,6 +47,7 @@ class Neo4jUnitOfWork:
                 else:
                     await self._tx.rollback()
         finally:
+            self._tx_lifecycle.active = False
             await self._session.close()
             self._session = None
             self._tx = None
@@ -53,9 +58,11 @@ class Neo4jUnitOfWork:
             raise RuntimeError("unit of work not started")
         await self._tx.commit()
         self._finished = True
+        self._tx_lifecycle.active = False
 
     async def rollback(self) -> None:
         if self._tx is None:
             raise RuntimeError("unit of work not started")
         await self._tx.rollback()
         self._finished = True
+        self._tx_lifecycle.active = False
