@@ -112,15 +112,22 @@ class TestModelImports:
         assert "allowed_principals" in columns
 
         document_fk = next(
-            fk for fk in Chunk.__table__.foreign_keys if fk.parent.name == "document_id"
+            fk
+            for fk in Chunk.__table__.foreign_keys
+            if fk.parent.name == "document_id" and fk.column.table.name == "documents"
+        )
+        version_document_fk = next(
+            fk
+            for fk in Chunk.__table__.foreign_keys
+            if fk.parent.name == "document_id" and fk.column.table.name == "document_versions"
         )
         version_fk = next(
             constraint
             for constraint in Chunk.__table__.foreign_key_constraints
             if constraint.name is None and len(constraint.columns) == 2
         )
-        assert document_fk.column.table.name == "documents"
         assert document_fk.ondelete == "RESTRICT"
+        assert version_document_fk.ondelete == "CASCADE"
         assert [column.name for column in version_fk.columns] == ["document_id", "version_id"]
         assert [element.column.table.name for element in version_fk.elements] == [
             "document_versions",

@@ -49,6 +49,12 @@ class _FakeSession:
         self.close_calls += 1
 
 
+class _FailingSession(_FakeSession):
+    async def begin_transaction(self) -> _FakeTx:
+        self.begin_calls += 1
+        raise RuntimeError("cannot begin transaction")
+
+
 class _FakeDriver:
     def __init__(self, session: _FakeSession) -> None:
         self._session = session
@@ -86,6 +92,21 @@ async def test_uow_commits_graph_writes() -> None:
     assert session.tx.rollback_calls == 0
     assert session.close_calls == 1
     assert len(session.tx.run_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_uow_closes_session_if_begin_transaction_fails() -> None:
+    session = _FailingSession()
+    driver = _FakeDriver(session)
+
+    with pytest.raises(RuntimeError, match="cannot begin transaction"):
+        async with Neo4jUnitOfWork(cast(Any, driver), database="neo4j-test"):
+            pass
+
+    assert driver.session_calls == 1
+    assert driver.database_args == ["neo4j-test"]
+    assert session.begin_calls == 1
+    assert session.close_calls == 1
 
 
 @pytest.mark.asyncio

@@ -29,7 +29,12 @@ class Neo4jUnitOfWork:
     async def __aenter__(self) -> Self:
         session = cast(Any, self._driver.session(database=self._database))
         self._session = session
-        self._tx = await session.begin_transaction()
+        try:
+            self._tx = await session.begin_transaction()
+        except Exception:
+            await session.close()
+            self._session = None
+            raise
         self._finished = False
         self._tx_lifecycle.active = True
         self.graph = Neo4jGraphRepository(

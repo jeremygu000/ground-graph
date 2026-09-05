@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from typing import cast
+
 import pytest
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from groundgraph.infrastructure.postgres.unit_of_work import PostgresUnitOfWork
 
@@ -38,7 +42,8 @@ class _FakeSession:
 @pytest.mark.asyncio
 async def test_uow_commits_on_success() -> None:
     session = _FakeSession()
-    uow = PostgresUnitOfWork(lambda: session)
+    session_factory = cast(Callable[[], AsyncSession], lambda: session)
+    uow = PostgresUnitOfWork(session_factory)
 
     async with uow:
         assert uow.execution is not None
@@ -51,7 +56,8 @@ async def test_uow_commits_on_success() -> None:
 @pytest.mark.asyncio
 async def test_uow_rolls_back_on_error() -> None:
     session = _FakeSession()
-    uow = PostgresUnitOfWork(lambda: session)
+    session_factory = cast(Callable[[], AsyncSession], lambda: session)
+    uow = PostgresUnitOfWork(session_factory)
 
     with pytest.raises(RuntimeError):
         async with uow:
@@ -65,7 +71,8 @@ async def test_uow_rolls_back_on_error() -> None:
 @pytest.mark.asyncio
 async def test_uow_manual_commit_and_rollback() -> None:
     session = _FakeSession()
-    uow = PostgresUnitOfWork(lambda: session)
+    session_factory = cast(Callable[[], AsyncSession], lambda: session)
+    uow = PostgresUnitOfWork(session_factory)
 
     async with uow:
         await uow.commit()

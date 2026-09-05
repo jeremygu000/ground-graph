@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Self
+from typing import Self, cast
+
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from groundgraph.infrastructure.postgres.document_repository import (
     PostgresDocumentRepository,
@@ -19,7 +21,7 @@ class PostgresUnitOfWork:
     It owns the transaction boundary; repositories must not commit.
     """
 
-    def __init__(self, session_factory: Callable[[], PostgresSession]) -> None:
+    def __init__(self, session_factory: Callable[[], AsyncSession]) -> None:
         self._session_factory = session_factory
         self._session: PostgresSession | None = None
         self.documents: PostgresDocumentRepository | None = None
@@ -27,7 +29,7 @@ class PostgresUnitOfWork:
         self.execution: ExecutionRepository | None = None
 
     async def __aenter__(self) -> Self:
-        self._session = self._session_factory()
+        self._session = cast(PostgresSession, self._session_factory())
         self.documents = PostgresDocumentRepository(self._session)
         self.outbox = PostgresOutboxRepository(self._session)
         self.execution = ExecutionRepository(self._session)
