@@ -11,7 +11,11 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from groundgraph.application.errors import InvalidTransitionError, NotFoundError
+from groundgraph.application.errors import (
+    ConcurrencyConflictError,
+    InvalidTransitionError,
+    NotFoundError,
+)
 from groundgraph.domain.execution import (
     ExecutionRun,
     ExecutionRunStatus,
@@ -242,3 +246,91 @@ async def test_run_update_terminal_fields(postgres_component: Any) -> None:
         assert finished.finished_at is not None
         assert finished.error_code == "oops"
         assert finished.error_message == "boom"
+
+
+async def test_run_update_conflicts_across_sessions(postgres_component: Any) -> None:
+    async with _setup_postgres(postgres_component.dsn) as session_factory:
+        async with session_factory() as writer_session:
+            writer_repo = ExecutionRepository(cast(PostgresSession, writer_session))
+            run = ExecutionRun(
+                run_id=uuid4(),
+                workflow="query",
+                status=ExecutionRunStatus.PENDING,
+                principal="engineering",
+                tenant_id="default",
+            )
+            await writer_repo.create_run(run)
+            await writer_session.commit()
+
+        async with session_factory() as winner_session, session_factory() as loser_session:
+            winner_repo = ExecutionRepository(cast(PostgresSession, winner_session))
+            loser_repo = ExecutionRepository(cast(PostgresSession, loser_session))
+
+            winner = await winner_repo.update_run_status(
+                run.run_id,
+                ExecutionRunStatus.PENDING,
+                ExecutionRunStatus.RUNNING,
+            )
+            assert winner.status == ExecutionRunStatus.RUNNING
+            await winner_session.commit()
+
+            with pytest.raises(ConcurrencyConflictError, match="status changed from pending"):
+                await loser_repo.update_run_status(
+                    run.run_id,
+                    ExecutionRunStatus.PENDING,
+                    ExecutionRunStatus.RUNNING,
+                )
+
+        async with session_factory() as verify_session:
+            verify_repo = ExecutionRepository(cast(PostgresSession, verify_session))
+            loaded = await verify_repo.get_run(run.run_id)
+            assert loaded is not None
+            assert loaded.status == ExecutionRunStatus.RUNNING
+
+
+async def test_step_update_conflicts_across_sessions(postgres_component: Any) -> None:
+    async with _setup_postgres(postgres_component.dsn) as session_factory:
+        async with session_factory() as writer_session:
+            writer_repo = ExecutionRepository(cast(PostgresSession, writer_session))
+            run = ExecutionRun(
+                run_id=uuid4(),
+                workflow="query",
+                status=ExecutionRunStatus.PENDING,
+                principal="engineering",
+                tenant_id="default",
+            )
+            await writer_repo.create_run(run)
+            step = ExecutionStep(
+                step_id=uuid4(),
+                run_id=run.run_id,
+                name="plan",
+                status=ExecutionStepStatus.PENDING,
+                depends_on=[],
+            )
+            await writer_repo.create_step(step)
+            await writer_session.commit()
+
+        async with session_factory() as winner_session, session_factory() as loser_session:
+            winner_repo = ExecutionRepository(cast(PostgresSession, winner_session))
+            loser_repo = ExecutionRepository(cast(PostgresSession, loser_session))
+
+            winner = await winner_repo.update_step_status(
+                step.step_id,
+                ExecutionStepStatus.PENDING,
+                ExecutionStepStatus.RUNNING,
+            )
+            assert winner.status == ExecutionStepStatus.RUNNING
+            await winner_session.commit()
+
+            with pytest.raises(ConcurrencyConflictError, match="status changed from pending"):
+                await loser_repo.update_step_status(
+                    step.step_id,
+                    ExecutionStepStatus.PENDING,
+                    ExecutionStepStatus.RUNNING,
+                )
+
+        async with session_factory() as verify_session:
+            verify_repo = ExecutionRepository(cast(PostgresSession, verify_session))
+            loaded = await verify_repo.get_step(step.step_id)
+            assert loaded is not None
+            assert loaded.status == ExecutionStepStatus.RUNNING

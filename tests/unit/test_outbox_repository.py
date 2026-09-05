@@ -149,6 +149,7 @@ def _execute_row(row: _Row) -> Any:
 async def test_add_get_and_empty_claim() -> None:
     session = _Session()
     repo = PostgresOutboxRepository(cast(PostgresSession, session))
+    completed_at = datetime.now(UTC)
     event = OutboxEvent(
         event_id=uuid4(),
         aggregate_type="document",
@@ -156,14 +157,18 @@ async def test_add_get_and_empty_claim() -> None:
         event_type=OutboxEventType.DOCUMENT_PARSED,
         payload={"title": "x"},
         created_at=datetime.now(UTC),
+        completed_at=completed_at,
     )
 
     saved = await repo.add(event)
     assert saved.event_id == event.event_id
+    assert saved.completed_at == completed_at
 
     session.rows[event.event_id] = _Row(event.event_id)
+    session.rows[event.event_id].completed_at = completed_at
     loaded = await repo.get(event.event_id)
     assert loaded is not None
+    assert loaded.completed_at == completed_at
 
     assert await repo.claim_batch(1, "worker", 30) == []
 
@@ -188,3 +193,25 @@ async def test_claim_and_fail_paths() -> None:
 
     await repo.mark_failed(row.event_id, token, "x" * 600)
     assert len(row.last_error or "") == 512
+
+
+@pytest.mark.asyncio
+async def test_outbox_repository_rejects_mutated_payload() -> None:
+    session = _Session()
+    repo = PostgresOutboxRepository(cast(PostgresSession, session))
+    payload: dict[str, object] = {"ok": {"nested": "value"}}
+    event = OutboxEvent(
+        event_id=uuid4(),
+        aggregate_type="document",
+        aggregate_id=uuid4(),
+        event_type=OutboxEventType.DOCUMENT_PARSED,
+        payload=payload,
+        created_at=datetime.now(UTC),
+    )
+    cast(dict[str, object], event.payload["ok"])["blob"] = b"raw"
+
+    with pytest.raises(ValueError, match="JsonValue"):
+        await repo.add(event)
+
+    assert session.added == []
+    assert session.flushed == 0

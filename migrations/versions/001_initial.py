@@ -96,8 +96,8 @@ def upgrade() -> None:
             server_default=sa.text("now()"),
             nullable=False,
         ),
-        sa.ForeignKeyConstraint(["source_id"], ["sources.source_id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("document_id"),
+        sa.ForeignKeyConstraint(["source_id"], ["sources.source_id"], ondelete="CASCADE"),
     )
 
     # document_versions
@@ -127,6 +127,16 @@ def upgrade() -> None:
         ["document_id"],
         unique=True,
         postgresql_where=sa.text("is_current = true"),
+    )
+    op.create_foreign_key(
+        "fk_documents_current_version_id_document_versions",
+        "documents",
+        "document_versions",
+        ["current_version_id"],
+        ["version_id"],
+        ondelete="SET NULL",
+        deferrable=True,
+        initially="DEFERRED",
     )
 
     # chunks
@@ -614,6 +624,11 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.drop_constraint(
+        "fk_documents_current_version_id_document_versions",
+        "documents",
+        type_="foreignkey",
+    )
     op.drop_table("human_review_items")
     op.drop_table("evaluation_results")
     op.drop_table("evaluation_runs")

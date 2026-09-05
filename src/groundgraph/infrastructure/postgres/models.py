@@ -105,7 +105,18 @@ class Document(Base):
     )
     title: Mapped[str] = mapped_column(Text, nullable=False)
     media_type: Mapped[str] = mapped_column(String(100), nullable=False)
-    current_version_id: Mapped[UUID | None] = mapped_column(PG_UUID, nullable=True)
+    current_version_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID,
+        ForeignKey(
+            "document_versions.version_id",
+            ondelete="SET NULL",
+            use_alter=True,
+            name="fk_documents_current_version_id_document_versions",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -117,6 +128,7 @@ class Document(Base):
     versions: Mapped[list[DocumentVersion]] = relationship(
         "DocumentVersion",
         back_populates="document",
+        foreign_keys="DocumentVersion.document_id",
         passive_deletes="all",
         order_by="DocumentVersion.created_at.desc()",
     )
@@ -141,7 +153,11 @@ class DocumentVersion(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
-    document: Mapped[Document] = relationship("Document", back_populates="versions")
+    document: Mapped[Document] = relationship(
+        "Document",
+        back_populates="versions",
+        foreign_keys=[document_id],
+    )
     chunks: Mapped[list[Chunk]] = relationship(
         "Chunk", back_populates="version", cascade="all, delete-orphan"
     )
@@ -149,6 +165,12 @@ class DocumentVersion(Base):
     __table_args__ = (
         Index("ix_document_versions_document_id", "document_id"),
         Index("ix_document_versions_checksum", "checksum"),
+        Index(
+            "ix_document_versions_current",
+            "document_id",
+            unique=True,
+            postgresql_where=sa.text("is_current = true"),
+        ),
     )
 
 

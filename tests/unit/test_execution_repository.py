@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import cast
 from uuid import UUID, uuid4
 
 import pytest
@@ -258,6 +259,28 @@ async def test_execution_repository_invalid_updates_and_reconstruct_missing_run(
 
     with pytest.raises(ValueError, match=r"ExecutionRun .* not found"):
         await repo.reconstruct_dag(uuid4())
+
+
+@pytest.mark.asyncio
+async def test_execution_repository_rejects_mutated_json_input() -> None:
+    session = _Session()
+    repo = ExecutionRepository(session)
+
+    run = ExecutionRun(
+        run_id=uuid4(),
+        workflow="query",
+        status=ExecutionRunStatus.PENDING,
+        principal="engineering",
+        tenant_id="default",
+        input={"ok": {"nested": "value"}},
+    )
+    cast(dict[str, object], run.input["ok"])["blob"] = b"raw"
+
+    with pytest.raises(ValueError, match="JsonValue"):
+        await repo.create_run(run)
+
+    assert session.added == []
+    assert session.flushed == 0
 
 
 @pytest.mark.asyncio

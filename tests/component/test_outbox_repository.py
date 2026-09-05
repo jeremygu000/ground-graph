@@ -201,3 +201,47 @@ async def test_claim_token_mismatch_and_backoff(postgres_component: Any) -> None
         pending = await session.get(Outbox, other.event_id)
         assert pending is not None
         assert pending.status == OutboxEventStatus.PENDING.value
+
+
+async def test_claim_lease_recovery_across_sessions(postgres_component: Any) -> None:
+    async with _setup_postgres(postgres_component.dsn) as session_factory:
+        async with session_factory() as writer_session:
+            await _truncate_outbox(writer_session)
+            row = await _insert_event(writer_session)
+
+        async with session_factory() as worker_a_session, session_factory() as worker_b_session:
+            repo_a = PostgresOutboxRepository(cast(PostgresSession, worker_a_session))
+            repo_b = PostgresOutboxRepository(cast(PostgresSession, worker_b_session))
+
+            claimed = await repo_a.claim_batch(
+                batch_size=1, worker_id="worker-a", lease_duration_seconds=1
+            )
+            assert len(claimed) == 1
+            token_a = claimed[0].claim_token or ""
+            await worker_a_session.commit()
+
+            await worker_b_session.execute(
+                update(Outbox)
+                .where(Outbox.event_id == row.event_id)
+                .values(
+                    available_at=datetime.now(UTC) - timedelta(seconds=1),
+                    lease_expires_at=datetime.now(UTC) - timedelta(seconds=1),
+                )
+            )
+            await worker_b_session.commit()
+
+            reclaimed = await repo_b.claim_batch(
+                batch_size=1, worker_id="worker-b", lease_duration_seconds=30
+            )
+            assert len(reclaimed) == 1
+            token_b = reclaimed[0].claim_token or ""
+            assert token_b != token_a
+            await worker_b_session.commit()
+
+            with pytest.raises(ValueError, match=r"invalid claim token|event claim lost"):
+                await repo_a.mark_completed(row.event_id, token_a)
+
+            await repo_b.mark_completed(row.event_id, token_b)
+            completed = await worker_b_session.get(Outbox, row.event_id)
+            assert completed is not None
+            assert completed.status == OutboxEventStatus.COMPLETED.value

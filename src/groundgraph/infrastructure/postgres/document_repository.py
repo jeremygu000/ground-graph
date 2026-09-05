@@ -9,6 +9,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from groundgraph.application.ports import DocumentRepository
 from groundgraph.domain.documents import Chunk, ParsedDocument, SourceDescriptor
+from groundgraph.infrastructure.postgres.json_utils import snapshot_json_object
 from groundgraph.infrastructure.postgres.models import (
     Chunk as ChunkModel,
 )
@@ -88,7 +89,7 @@ class PostgresDocumentRepository(DocumentRepository):
             document_id=document.document_id,
             checksum=document.checksum,
             content=document.content,
-            doc_metadata=document.metadata,
+            doc_metadata=snapshot_json_object(document.metadata),
             effective_at=document.effective_at,
             is_current=True,
         )

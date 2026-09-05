@@ -265,6 +265,87 @@ async def test_document_current_version_fallback_and_delete(
         assert version_row.checksum == "abc123"
 
 
+async def test_document_version_lifecycle_and_delete(postgres_component: Any) -> None:
+    async with (
+        _setup_postgres(postgres_component.dsn) as session_factory,
+        session_factory() as session,
+    ):
+        repo = PostgresDocumentRepository(cast(PostgresSession, session))
+
+        source = SourceDescriptor(
+            source_id=uuid4(),
+            source_type="filesystem",
+            uri="/docs",
+            classification="internal",
+            tenant_id="tenant-a",
+        )
+        await repo.create_source(source)
+
+        document_id = uuid4()
+        version_v1 = uuid4()
+        version_v2 = uuid4()
+
+        first = ParsedDocument(
+            document_id=document_id,
+            version_id=version_v1,
+            source_id=source.source_id,
+            title="Version 1",
+            media_type="text/markdown",
+            checksum="checksum-v1",
+            content="# v1",
+            metadata={"revision": 1},
+            effective_at=datetime(2024, 1, 1, tzinfo=UTC),
+        )
+        second = ParsedDocument(
+            document_id=document_id,
+            version_id=version_v2,
+            source_id=source.source_id,
+            title="Version 2",
+            media_type="text/markdown",
+            checksum="checksum-v2",
+            content="# v2",
+            metadata={"revision": 2},
+            effective_at=datetime(2024, 1, 2, tzinfo=UTC),
+        )
+
+        await repo.create_document(first)
+        await session.commit()
+
+        await repo.create_document(second)
+        await session.commit()
+
+        loaded = await repo.get_document(document_id)
+        assert loaded is not None
+        assert loaded.version_id == version_v2
+        assert loaded.title == "Version 2"
+
+        versions = await repo.list_document_versions(document_id)
+        assert {version.version_id for version in versions} == {version_v1, version_v2}
+
+        v1_row = await session.get(SqlDocumentVersion, version_v1)
+        v2_row = await session.get(SqlDocumentVersion, version_v2)
+        doc_row = await session.get(SqlDocument, document_id)
+        assert v1_row is not None
+        assert v2_row is not None
+        assert doc_row is not None
+        assert v1_row.is_current is False
+        assert v2_row.is_current is True
+        assert doc_row.current_version_id == version_v2
+
+        await repo.delete_document(document_id)
+        await session.commit()
+
+        deleted_doc = await session.get(SqlDocument, document_id)
+        assert deleted_doc is not None
+        assert deleted_doc.current_version_id is None
+        v1_row = await session.get(SqlDocumentVersion, version_v1)
+        v2_row = await session.get(SqlDocumentVersion, version_v2)
+        assert v1_row is not None
+        assert v2_row is not None
+        assert v1_row.is_current is False
+        assert v2_row.is_current is False
+
+
 async def test_chunk_lifecycle_and_listing(postgres_component: Any) -> None:
     async with (
         _setup_postgres(postgres_component.dsn) as session_factory,

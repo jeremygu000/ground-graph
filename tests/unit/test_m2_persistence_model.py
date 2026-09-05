@@ -54,6 +54,14 @@ class TestModelImports:
         assert source_fk.column.table.name == "sources"
         assert source_fk.ondelete == "CASCADE"
 
+        current_version_fk = next(
+            fk for fk in Document.__table__.foreign_keys if fk.parent.name == "current_version_id"
+        )
+        assert current_version_fk.column.table.name == "document_versions"
+        assert current_version_fk.ondelete == "SET NULL"
+        assert current_version_fk.deferrable is True
+        assert current_version_fk.initially == "DEFERRED"
+
     def test_document_version_model_has_doc_metadata(self) -> None:
         columns = {c.name for c in DocumentVersion.__table__.columns}
         assert "version_id" in columns
@@ -63,6 +71,14 @@ class TestModelImports:
         assert "doc_metadata" in columns
         assert "effective_at" in columns
         assert "is_current" in columns
+
+        current_indexes = [
+            index
+            for index in DocumentVersion.__table__.indexes
+            if index.name == "ix_document_versions_current"
+        ]
+        assert len(current_indexes) == 1
+        assert current_indexes[0].unique is True
 
     def test_chunk_model_has_required_columns(self) -> None:
         columns = {c.name for c in Chunk.__table__.columns}

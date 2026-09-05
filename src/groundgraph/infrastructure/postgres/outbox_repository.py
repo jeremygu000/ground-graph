@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import select, update
 
 from groundgraph.domain.evidence import OutboxEvent, OutboxEventStatus, OutboxEventType
+from groundgraph.infrastructure.postgres.json_utils import snapshot_json_object
 from groundgraph.infrastructure.postgres.models import Outbox as OutboxModel
 from groundgraph.infrastructure.postgres.session import PostgresSession
 
@@ -22,13 +23,14 @@ class PostgresOutboxRepository:
             aggregate_type=event.aggregate_type,
             aggregate_id=event.aggregate_id,
             event_type=event.event_type.value,
-            payload=event.payload,
+            payload=snapshot_json_object(event.payload),
             status=event.status.value,
             attempts=event.attempts,
             last_error=event.last_error,
             created_at=event.created_at,
             available_at=event.created_at,
             claimed_at=event.claimed_at,
+            completed_at=event.completed_at,
         )
         self._session.add(model)
         await self._session.flush()
@@ -131,11 +133,12 @@ class PostgresOutboxRepository:
             aggregate_type=row.aggregate_type,
             aggregate_id=row.aggregate_id,
             event_type=OutboxEventType(row.event_type),
-            payload=row.payload,
+            payload=snapshot_json_object(row.payload),
             status=OutboxEventStatus(row.status),
             attempts=row.attempts,
             last_error=row.last_error,
             created_at=row.created_at,
             claimed_at=row.claimed_at,
+            completed_at=row.completed_at,
             claim_token=row.claim_token,
         )

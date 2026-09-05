@@ -24,6 +24,7 @@ from groundgraph.domain.execution import (
     ExecutionStep,
     ExecutionStepStatus,
 )
+from groundgraph.infrastructure.postgres.json_utils import snapshot_json_object
 from groundgraph.infrastructure.postgres.models import ExecutionRun as SQLExecutionRun
 from groundgraph.infrastructure.postgres.models import ExecutionStep as SQLExecutionStep
 from groundgraph.infrastructure.postgres.session import PostgresSession
@@ -45,8 +46,8 @@ class ExecutionRepository:
             status=run.status.value,
             principal=run.principal,
             tenant_id=run.tenant_id,
-            input=run.input,
-            output=run.output,
+            input=snapshot_json_object(run.input),
+            output=snapshot_json_object(run.output),
             started_at=run.started_at,
             finished_at=run.finished_at,
             error_code=run.error_code,
@@ -118,8 +119,8 @@ class ExecutionRepository:
             status=step.status.value,
             attempt=step.attempt,
             depends_on=step.depends_on,
-            input=step.input,
-            output=step.output,
+            input=snapshot_json_object(step.input),
+            output=snapshot_json_object(step.output),
             started_at=step.started_at,
             finished_at=step.finished_at,
             error_code=step.error_code,

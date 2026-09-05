@@ -315,3 +315,28 @@ async def test_document_repository_missing_rows_return_none_or_empty() -> None:
     assert await repo.list_chunks(document_id, version_id) == []
 
     await repo.delete_document(document_id)
+
+
+@pytest.mark.asyncio
+async def test_document_repository_rejects_mutated_metadata() -> None:
+    session = _Session()
+    repo = PostgresDocumentRepository(cast(Any, session))
+    metadata: dict[str, object] = {"ok": {"nested": "value"}}
+    document = ParsedDocument(
+        document_id=uuid4(),
+        version_id=uuid4(),
+        source_id=uuid4(),
+        title="Doc",
+        media_type="text/markdown",
+        checksum="abc123",
+        content="# Hello",
+        metadata=metadata,
+        effective_at=datetime(2024, 1, 1, tzinfo=UTC),
+    )
+    cast(dict[str, object], document.metadata["ok"])["blob"] = b"raw"
+
+    with pytest.raises(ValueError, match="JsonValue"):
+        await repo.create_document(document)
+
+    assert session.added == []
+    assert session.flushed == 0
