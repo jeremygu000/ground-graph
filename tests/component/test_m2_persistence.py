@@ -256,9 +256,12 @@ async def test_document_current_version_fallback_and_delete(
         await repo.delete_document(document.document_id)
         await session.commit()
 
-        assert await session.get(SqlDocument, document.document_id) is None
+        deleted_doc = await session.get(SqlDocument, document.document_id)
+        assert deleted_doc is not None
+        assert deleted_doc.current_version_id is None
         version_row = await session.get(SqlDocumentVersion, document.version_id)
         assert version_row is not None
+        assert version_row.is_current is False
         assert version_row.checksum == "abc123"
 
 
@@ -565,7 +568,8 @@ async def test_outbox_claim_pattern(postgres_component: Any) -> None:
             payload={"title": "Test"},
             status="pending",
             attempts=0,
-            created_at=datetime.now(UTC),
+            created_at=datetime.now(UTC) - timedelta(seconds=1),
+            available_at=datetime.now(UTC) - timedelta(seconds=1),
         )
         session.add(event)
         await session.commit()

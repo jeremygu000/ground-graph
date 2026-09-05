@@ -82,15 +82,19 @@ class PostgresOutboxRepository:
             raise ValueError("invalid claim token")
         if row.status != OutboxEventStatus.CLAIMED.value:
             raise ValueError("event not in claimed state")
-        await self._session.execute(
+        result = await self._session.execute(
             update(OutboxModel)
             .where(OutboxModel.event_id == event_id)
+            .where(OutboxModel.status == OutboxEventStatus.CLAIMED.value)
+            .where(OutboxModel.claim_token == claim_token)
             .values(
                 status=OutboxEventStatus.COMPLETED.value,
                 completed_at=datetime.now(UTC),
                 lease_expires_at=None,
             )
         )
+        if result.rowcount != 1:
+            raise ValueError("event claim lost")
         await self._session.flush()
 
     async def mark_failed(self, event_id: UUID, claim_token: str, error: str) -> None:
@@ -101,9 +105,11 @@ class PostgresOutboxRepository:
             raise ValueError("invalid claim token")
         if row.status != OutboxEventStatus.CLAIMED.value:
             raise ValueError("event not in claimed state")
-        await self._session.execute(
+        result = await self._session.execute(
             update(OutboxModel)
             .where(OutboxModel.event_id == event_id)
+            .where(OutboxModel.status == OutboxEventStatus.CLAIMED.value)
+            .where(OutboxModel.claim_token == claim_token)
             .values(
                 status=OutboxEventStatus.PENDING.value,
                 last_error=error[:512],
@@ -115,6 +121,8 @@ class PostgresOutboxRepository:
                 + timedelta(seconds=min(3600.0, 2.0 ** (row.attempts + 1))),
             )
         )
+        if result.rowcount != 1:
+            raise ValueError("event claim lost")
         await self._session.flush()
 
     def _to_domain(self, row: OutboxModel) -> OutboxEvent:

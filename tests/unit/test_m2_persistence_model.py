@@ -83,7 +83,7 @@ class TestModelImports:
             fk for fk in Chunk.__table__.foreign_keys if fk.parent.name == "version_id"
         )
         assert document_fk.column.table.name == "documents"
-        assert document_fk.ondelete == "CASCADE"
+        assert document_fk.ondelete == "RESTRICT"
         assert version_fk.column.table.name == "document_versions"
         assert version_fk.ondelete == "CASCADE"
 

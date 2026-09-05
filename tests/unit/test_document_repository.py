@@ -168,6 +168,8 @@ async def test_document_repository_happy_paths() -> None:
 
     session = _Session(
         responses=[
+            _Result(row=None),  # create_document existing lookup
+            _Result(),  # create_document upsert
             _Result(row=source_row),
             _Result(rows=[source_row, _source_model(uuid4(), "/docs/b")]),
             _Result(row=document_row),
@@ -178,6 +180,7 @@ async def test_document_repository_happy_paths() -> None:
             _Result(rows=[version_row, older_version_row]),
             _Result(row=chunk_row),
             _Result(rows=[chunk_row, later_chunk_row]),
+            _Result(),
             _Result(),
         ]
     )
@@ -250,8 +253,8 @@ async def test_document_repository_happy_paths() -> None:
     await repo.delete_document(document_id)
 
     assert session.flushed == 3
-    assert len(session.added) == 4
-    assert len(session.executed) == 11
+    assert len(session.added) == 3
+    assert len(session.executed) == 14
 
 
 @pytest.mark.asyncio
@@ -299,6 +302,7 @@ async def test_document_repository_missing_rows_return_none_or_empty() -> None:
             _Result(row=None),  # get_chunk
             _Result(rows=[]),  # list_chunks
             _Result(),  # delete_document
+            _Result(),  # delete_document version update
         ]
     )
     repo = PostgresDocumentRepository(cast(Any, session))

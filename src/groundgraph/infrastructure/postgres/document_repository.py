@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import delete, select
+from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from groundgraph.application.ports import DocumentRepository
@@ -53,6 +53,17 @@ class PostgresDocumentRepository(DocumentRepository):
         return [self._source_to_domain(row) for row in result.scalars().all()]
 
     async def create_document(self, document: ParsedDocument) -> ParsedDocument:
+        existing = await self._session.execute(
+            select(DocumentModel).where(DocumentModel.document_id == document.document_id)
+        )
+        current_document = existing.scalar_one_or_none()
+        if current_document and current_document.current_version_id is not None:
+            await self._session.execute(
+                update(DocumentVersionModel)
+                .where(DocumentVersionModel.version_id == current_document.current_version_id)
+                .where(DocumentVersionModel.document_id == document.document_id)
+                .values(is_current=False)
+            )
         doc_stmt = (
             pg_insert(DocumentModel)
             .values(
@@ -62,7 +73,15 @@ class PostgresDocumentRepository(DocumentRepository):
                 media_type=document.media_type,
                 current_version_id=document.version_id,
             )
-            .on_conflict_do_nothing(index_elements=["document_id"])
+            .on_conflict_do_update(
+                index_elements=["document_id"],
+                set_={
+                    "source_id": document.source_id,
+                    "title": document.title,
+                    "media_type": document.media_type,
+                    "current_version_id": document.version_id,
+                },
+            )
         )
         version = DocumentVersionModel(
             version_id=document.version_id,
@@ -73,7 +92,7 @@ class PostgresDocumentRepository(DocumentRepository):
             effective_at=document.effective_at,
             is_current=True,
         )
-        self._session.add(doc_stmt)
+        await self._session.execute(doc_stmt)
         self._session.add(version)
         await self._session.flush()
         return document
@@ -163,7 +182,14 @@ class PostgresDocumentRepository(DocumentRepository):
 
     async def delete_document(self, document_id: UUID) -> None:
         await self._session.execute(
-            delete(DocumentModel).where(DocumentModel.document_id == document_id)
+            update(DocumentModel)
+            .where(DocumentModel.document_id == document_id)
+            .values(current_version_id=None)
+        )
+        await self._session.execute(
+            update(DocumentVersionModel)
+            .where(DocumentVersionModel.document_id == document_id)
+            .values(is_current=False)
         )
 
     async def _get_current_version(

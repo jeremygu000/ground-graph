@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from typing import Any, ClassVar
 from uuid import UUID, uuid4
 
+import sqlalchemy as sa
 from sqlalchemy import (
     ARRAY,
     Boolean,
@@ -129,7 +130,7 @@ class DocumentVersion(Base):
 
     version_id: Mapped[UUID] = mapped_column(PG_UUID, primary_key=True, default=_gen_uuid)
     document_id: Mapped[UUID] = mapped_column(
-        PG_UUID, ForeignKey("documents.document_id", ondelete="CASCADE"), nullable=False
+        PG_UUID, ForeignKey("documents.document_id", ondelete="RESTRICT"), nullable=False
     )
     checksum: Mapped[str] = mapped_column(Text, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
@@ -156,7 +157,7 @@ class Chunk(Base):
 
     chunk_id: Mapped[UUID] = mapped_column(PG_UUID, primary_key=True, default=_gen_uuid)
     document_id: Mapped[UUID] = mapped_column(
-        PG_UUID, ForeignKey("documents.document_id", ondelete="CASCADE"), nullable=False
+        PG_UUID, ForeignKey("documents.document_id", ondelete="RESTRICT"), nullable=False
     )
     version_id: Mapped[UUID] = mapped_column(
         PG_UUID, ForeignKey("document_versions.version_id", ondelete="CASCADE"), nullable=False
@@ -444,6 +445,12 @@ class IndexVersion(Base):
 
     __table_args__ = (
         Index("ix_index_versions_index_name", "index_name"),
+        Index(
+            "ix_index_versions_active",
+            "index_name",
+            unique=True,
+            postgresql_where=sa.text("is_active = true"),
+        ),
         UniqueConstraint("index_name", "version", name="uq_index_name_version"),
     )
 

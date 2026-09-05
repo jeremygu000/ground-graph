@@ -73,7 +73,8 @@ class _Session:
         if self.claim_rows:
             return self._claim_rows()
         if hasattr(statement, "_values") and hasattr(statement, "_where_criteria"):
-            self._apply_update(statement)
+            updated = self._apply_update(statement)
+            return _Result(rowcount=1 if updated else 0)
         return _Result(rowcount=1)
 
     def _claim_rows(self) -> _Result:
@@ -81,13 +82,15 @@ class _Session:
         self.claim_rows = []
         return _Result(rows=rows, rowcount=len(rows))
 
-    def _apply_update(self, statement: Any) -> None:
+    def _apply_update(self, statement: Any) -> bool:
         target_event_id = self._target_event_id(statement)
         if not target_event_id:
-            return
+            return False
         row = self.rows.get(cast(UUID, target_event_id))
         if not row:
-            return
+            return False
+        if self._fencing_failed(statement, row):
+            return False
         for col, raw_value in getattr(statement, "_values", {}).items():
             col_name = self._column_name(col)
             if not col_name:
@@ -95,6 +98,24 @@ class _Session:
             value = raw_value.value if hasattr(raw_value, "value") else raw_value
             if hasattr(row, col_name):
                 setattr(row, col_name, value)
+        return True
+
+    def _fencing_failed(self, statement: Any, row: _Row) -> bool:
+        criteria = getattr(statement, "_where_criteria", ())
+        wanted_status = OutboxEventStatus.CLAIMED.value
+        status_ok = any(
+            getattr(getattr(clause, "left", None), "key", None) == "status"
+            and getattr(getattr(clause, "right", None), "value", getattr(clause, "right", None))
+            == wanted_status
+            for clause in criteria
+        )
+        token_ok = any(
+            getattr(getattr(clause, "left", None), "key", None) == "claim_token"
+            and getattr(getattr(clause, "right", None), "value", getattr(clause, "right", None))
+            == row.claim_token
+            for clause in criteria
+        )
+        return not (status_ok and token_ok)
 
     def _target_event_id(self, statement: Any) -> UUID | None:
         for clause in statement._where_criteria:

@@ -119,7 +119,7 @@ def _has_fk(
     *,
     constrained_column: str,
     referred_table: str,
-    ondelete: str = "CASCADE",
+    ondelete: str = "RESTRICT",
 ) -> bool:
     for fk in foreign_keys:
         constrained_columns = fk.get("constrained_columns")
@@ -183,7 +183,12 @@ async def test_alembic_upgrade_head_on_empty_db(project_root: Path) -> None:
 
     documents_columns, documents_fks = await _table_schema(dsn, "documents")
     assert "tenant_id" not in documents_columns
-    assert _has_fk(documents_fks, constrained_column="source_id", referred_table="sources")
+    assert _has_fk(
+        documents_fks,
+        constrained_column="source_id",
+        referred_table="sources",
+        ondelete="CASCADE",
+    )
 
     document_versions_columns, document_versions_fks = await _table_schema(dsn, "document_versions")
     assert "doc_metadata" in document_versions_columns
@@ -191,15 +196,22 @@ async def test_alembic_upgrade_head_on_empty_db(project_root: Path) -> None:
         document_versions_fks,
         constrained_column="document_id",
         referred_table="documents",
+        ondelete="RESTRICT",
     )
 
     chunks_columns, chunks_fks = await _table_schema(dsn, "chunks")
     assert {"heading_path", "allowed_principals"}.issubset(chunks_columns)
-    assert _has_fk(chunks_fks, constrained_column="document_id", referred_table="documents")
+    assert _has_fk(
+        chunks_fks,
+        constrained_column="document_id",
+        referred_table="documents",
+        ondelete="RESTRICT",
+    )
     assert _has_fk(
         chunks_fks,
         constrained_column="version_id",
         referred_table="document_versions",
+        ondelete="CASCADE",
     )
 
     assert await _assert_index_exists(dsn, "ix_execution_runs_tenant_id"), "tenant_id index missing"
