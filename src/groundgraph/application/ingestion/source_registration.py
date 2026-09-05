@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 from pathlib import Path
-from uuid import UUID
+from uuid import uuid4
 
 from groundgraph.application.ports import DocumentRepository
 from groundgraph.domain.documents import SourceDescriptor
@@ -23,7 +23,7 @@ class SourceRegistrationService:
         allowed_principals: list[str],
     ) -> SourceDescriptor:
         source = SourceDescriptor(
-            source_id=UUID(int=0),
+            source_id=uuid4(),
             source_type="filesystem",
             uri=uri,
             classification=classification,

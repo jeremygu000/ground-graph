@@ -10,7 +10,6 @@ import hashlib
 import re
 from uuid import UUID, uuid4
 
-from groundgraph.domain.defaults import empty_str_list
 from groundgraph.domain.documents import Chunk
 
 from .parsers import ParsedContent
@@ -32,13 +31,7 @@ class Chunker:
         chunks: list[Chunk] = []
         ordinal = 0
 
-        for section_heading, section_body in sections:
-            heading_path = empty_str_list()
-            if section_heading:
-                heading_path = [section_heading]
-            elif content.headings:
-                heading_path = [h[1] for h in content.headings if h[0] == 1]
-
+        for section_heading_path, section_body in sections:
             sub_chunks = self._chunk_text(
                 section_body,
                 max_tokens=MAX_TOKENS,
@@ -51,7 +44,7 @@ class Chunker:
                         document_id=document_id,
                         version_id=version_id,
                         ordinal=ordinal,
-                        heading_path=heading_path,
+                        heading_path=section_heading_path,
                         content=sub_body,
                         token_count=self._estimate_tokens(sub_body),
                         checksum=self._checksum(sub_body),
@@ -64,33 +57,36 @@ class Chunker:
 
         return chunks
 
-    def _split_by_heading(self, content: ParsedContent) -> list[tuple[str, str]]:
+    def _split_by_heading(self, content: ParsedContent) -> list[tuple[list[str], str]]:
         if not content.headings:
-            return [("", content.body)]
+            return [([], content.body)]
 
         lines = content.body.splitlines(keepends=True)
-        sections: list[tuple[str, str]] = []
-        current_heading = ""
+        sections: list[tuple[list[str], str]] = []
+        heading_path: list[str] = []
         current_lines: list[str] = []
 
         for line in lines:
-            is_heading = False
+            matched_level = 0
+            matched_text = ""
             for level, heading_text in content.headings:
                 prefix = "#" * level
                 heading_prefix = f"{prefix} {heading_text}"
                 if line.strip().startswith(prefix) and line.strip().startswith(heading_prefix):
-                    is_heading = True
+                    matched_level = level
+                    matched_text = heading_text
                     break
-            if is_heading:
+            if matched_level:
                 if current_lines or sections:
-                    sections.append((current_heading, "".join(current_lines).rstrip()))
+                    sections.append((list(heading_path), "".join(current_lines).rstrip()))
                     current_lines = []
-                m = re.match(r"^#+\s+(.+)$", line.strip())
-                current_heading = m.group(1) if m else ""
+                while len(heading_path) >= matched_level:
+                    heading_path.pop()
+                heading_path.append(matched_text)
             current_lines.append(line)
 
         if current_lines:
-            sections.append((current_heading, "".join(current_lines).rstrip()))
+            sections.append((list(heading_path), "".join(current_lines).rstrip()))
         return sections
 
     def _chunk_text(self, text: str, max_tokens: int, overlap_tokens: int) -> list[str]:
@@ -128,13 +124,11 @@ class Chunker:
     SENTENCE_END_RE = re.compile(r"[.!?]\s+(?=[A-Z])")
 
     def _find_sentence_boundary(self, text: str, pos: int) -> int:
-        if pos < len(text):
-            search = text[self.start_of_window(pos) : pos + 200]
-        else:
-            search = text[pos - 200 : pos]
+        window_start = self.start_of_window(pos)
+        search = text[window_start : pos + 200] if pos < len(text) else text[window_start:pos]
         m = self.SENTENCE_END_RE.search(search)
         if m:
-            return pos - len(search) + m.end()
+            return window_start + m.end()
         return pos
 
     def start_of_window(self, pos: int) -> int:

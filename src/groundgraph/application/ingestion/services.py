@@ -31,16 +31,29 @@ class IngestionService:
         source_id: UUID,
         file_path: str,
         media_type: str,
-        allowed_principals: list[str],
-        tenant_id: str,
     ) -> tuple[UUID, UUID]:
-        raw_bytes = await self._read_file(file_path)
+        source = await self._documents.get_source(source_id)
+        if source is None:
+            raise ValueError(f"source not found: {source_id}")
+
+        resolved_path = self._resolve_safe_path(source.uri, file_path)
+
+        raw_bytes = await self._read_file(str(resolved_path))
+        self._check_size(raw_bytes)
+
         checksum = self._sha256(raw_bytes)
 
-        document_id = uuid4()
-        version_id = uuid4()
+        existing = await self._documents.find_active_document_by_source(source_id, file_path)
+        if existing is not None:
+            doc_id, ver_id = existing
+            current = await self._documents.get_document_version(doc_id, ver_id)
+            if current is not None and current.checksum == checksum:
+                return (doc_id, ver_id)
+            document_id, version_id = doc_id, uuid4()
+        else:
+            document_id, version_id = uuid4(), uuid4()
 
-        raw_key = f"sources/{source_id}/{document_id}/v1/raw"
+        raw_key = f"sources/{source_id}/{document_id}/{version_id}/raw"
         await self._object_store.put_raw(raw_key, raw_bytes, media_type)
 
         parsed = self._parse(raw_bytes, media_type)
@@ -65,12 +78,27 @@ class IngestionService:
             content=parsed,
             document_id=document_id,
             version_id=version_id,
-            allowed_principals=allowed_principals,
+            allowed_principals=source.allowed_principals,
         )
         for chunk in chunks:
             await self._documents.create_chunk(chunk)
 
         return document_id, version_id
+
+    MAX_FILE_SIZE = 100 * 1024 * 1024
+
+    def _resolve_safe_path(self, source_root: str, file_path: str) -> Path:
+        root = Path(source_root).resolve()
+        requested = Path(file_path).resolve()
+        if not str(requested).startswith(str(root)):
+            raise ValueError(f"file path outside source root: {file_path}")
+        if requested.is_symlink():
+            raise ValueError(f"symlink escape not allowed: {file_path}")
+        return requested
+
+    def _check_size(self, data: bytes) -> None:
+        if len(data) > self.MAX_FILE_SIZE:
+            raise ValueError(f"file exceeds maximum size: {len(data)} > {self.MAX_FILE_SIZE}")
 
     async def _read_file(self, path: str) -> bytes:
         p = Path(path)

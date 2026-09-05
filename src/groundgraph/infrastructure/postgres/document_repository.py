@@ -53,6 +53,25 @@ class PostgresDocumentRepository(DocumentRepository):
         result = await self._session.execute(select(SourceModel).order_by(SourceModel.created_at))
         return [self._source_to_domain(row) for row in result.scalars().all()]
 
+    async def find_active_document_by_source(
+        self, source_id: UUID, file_path: str
+    ) -> tuple[UUID, UUID] | None:
+        result = await self._session.execute(
+            select(DocumentModel)
+            .where(DocumentModel.source_id == source_id)
+            .order_by(DocumentModel.created_at.desc())
+        )
+        for doc_row in result.scalars().all():
+            version_row = await self._get_current_version(
+                doc_row.document_id, doc_row.current_version_id
+            )
+            if version_row is None:
+                continue
+            metadata = dict(version_row.doc_metadata) if version_row.doc_metadata else {}
+            if metadata.get("file_path") == file_path:
+                return (doc_row.document_id, version_row.version_id)
+        return None
+
     async def create_document(self, document: ParsedDocument) -> ParsedDocument:
         existing = await self._session.execute(
             select(DocumentModel).where(DocumentModel.document_id == document.document_id)

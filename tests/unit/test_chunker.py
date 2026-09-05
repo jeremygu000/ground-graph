@@ -41,8 +41,8 @@ class TestChunker:
     def test_heading_path_preserved_in_chunks(self) -> None:
         content = ParsedContent(
             title="Doc",
-            body="Some body text.",
-            media_type="text/plain",
+            body="# Section One\nContent under section one.\n## Subsection A\nMore content.",
+            media_type="text/markdown",
             headings=[(1, "Section One"), (2, "Subsection A")],
         )
         chunks = self.chunker.chunk(content, self.document_id, self.version_id, self.principals)
