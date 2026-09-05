@@ -30,7 +30,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 import time
-from collections.abc import Generator
+from collections.abc import AsyncGenerator, Generator
 from dataclasses import dataclass
 
 import pytest
@@ -158,7 +158,9 @@ def postgres_component(docker_available: bool) -> Generator[PostgresComponent, N
 
 
 @pytest.fixture(scope="session")
-async def postgres(postgres_component: PostgresComponent) -> dict[str, object]:
+async def postgres(
+    postgres_component: PostgresComponent,
+) -> AsyncGenerator[dict[str, object], None]:
     """PostgresComponent with schema migrated.
 
     Creates all tables via SQLAlchemy Base.metadata.create_all once per session,
@@ -175,10 +177,13 @@ async def postgres(postgres_component: PostgresComponent) -> dict[str, object]:
 
     async_session_factory = async_sessionmaker(async_engine, expire_on_commit=False)
 
-    return {
-        "dsn": postgres_component.dsn,
-        "session": async_session_factory,
-    }
+    try:
+        yield {
+            "dsn": postgres_component.dsn,
+            "session": async_session_factory,
+        }
+    finally:
+        await async_engine.dispose()
 
 
 @pytest.fixture(scope="session")

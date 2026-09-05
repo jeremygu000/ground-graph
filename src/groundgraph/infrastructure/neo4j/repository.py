@@ -5,6 +5,7 @@ Implements the GraphRepository port for Neo4j using the official async driver.
 
 from __future__ import annotations
 
+import json
 from typing import Any, LiteralString, cast
 from uuid import UUID
 
@@ -78,13 +79,17 @@ RETURN m
 
 
 def _dict_to_entity(record: Any) -> CanonicalEntity:
-    data = record.data() if hasattr(record, "data") else dict(record)
+    raw = record.data() if hasattr(record, "data") else record
+    node = raw.get("e", raw)
+    node_dict: dict[str, Any] = node if isinstance(node, dict) else {}
     return CanonicalEntity(
-        entity_id=data["e.entity_id"],
-        entity_type=data["e.entity_type"],
-        canonical_name=data["e.canonical_name"],
-        aliases=data["e.aliases"] or [],
-        attributes=data["e.attributes"] or {},
+        entity_id=cast(UUID, node_dict.get("entity_id")),
+        entity_type=cast(str, node_dict.get("entity_type")),
+        canonical_name=cast(str, node_dict.get("canonical_name")),
+        aliases=list(node_dict.get("aliases") or []),
+        attributes=json.loads(cast(str, node_dict.get("attributes")))
+        if node_dict.get("attributes")
+        else {},
     )
 
 
@@ -101,10 +106,14 @@ class Neo4jGraphRepository:
             "entity_type": entity.entity_type,
             "canonical_name": entity.canonical_name,
             "aliases": entity.aliases,
-            "attributes": entity.attributes,
+            "attributes": json.dumps(entity.attributes) if entity.attributes else "{}",
         }
-        async with cast(Any, self._driver.session()) as session:
-            await session.run(cypher, **params)
+        async with (
+            cast(Any, self._driver.session()) as session,
+            await session.begin_transaction() as tx,
+        ):
+            await tx.run(cypher, **params)
+            await tx.commit()
         return entity
 
     async def get_entity(self, entity_id: UUID) -> CanonicalEntity | None:
@@ -140,8 +149,12 @@ class Neo4jGraphRepository:
             "extraction_method": fact.extraction_method,
             "ontology_version": fact.ontology_version,
         }
-        async with cast(Any, self._driver.session()) as session:
-            await session.run(_FACT_MERGE, **params)
+        async with (
+            cast(Any, self._driver.session()) as session,
+            await session.begin_transaction() as tx,
+        ):
+            await tx.run(_FACT_MERGE, **params)
+            await tx.commit()
         return fact
 
     async def get_fact(self, fact_id: UUID) -> KnowledgeFact | None:
@@ -152,6 +165,9 @@ class Neo4jGraphRepository:
             if not record:
                 return None
             f = record["f"]
+            observed = f["observed_at"]
+            if hasattr(observed, "to_native"):
+                observed = observed.to_native()
             return KnowledgeFact(
                 fact_id=f["fact_id"],
                 subject_id=f["subject_id"],
@@ -162,7 +178,7 @@ class Neo4jGraphRepository:
                 evidence_ids=f.get("evidence_ids", []),
                 valid_from=f.get("valid_from"),
                 valid_to=f.get("valid_to"),
-                observed_at=f["observed_at"],
+                observed_at=observed,
                 extraction_method=f["extraction_method"],
                 ontology_version=f["ontology_version"],
             )

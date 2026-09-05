@@ -5,6 +5,8 @@ Requires Docker. Skipped if Docker is not available.
 
 from __future__ import annotations
 
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
@@ -30,19 +32,24 @@ from groundgraph.infrastructure.postgres.models import (
 pytestmark = [pytest.mark.integration, pytest.mark.component]
 
 
-async def _setup_postgres(dsn: str) -> async_sessionmaker:
-    """Create tables and return session factory."""
+@asynccontextmanager
+async def _setup_postgres(dsn: str) -> AsyncGenerator[async_sessionmaker, None]:
+    """Create tables and yield a session factory."""
     engine = create_async_engine(dsn)
     async with engine.begin() as conn:
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await conn.run_sync(PostgresBase.metadata.create_all)
-    await engine.dispose()
-    return async_sessionmaker(create_async_engine(dsn), expire_on_commit=False)
+    try:
+        yield async_sessionmaker(engine, expire_on_commit=False)
+    finally:
+        await engine.dispose()
 
 
 async def test_source_create_and_fetch(postgres_component: Any) -> None:
-    session_factory = await _setup_postgres(postgres_component.dsn)
-    async with session_factory() as session:
+    async with (
+        _setup_postgres(postgres_component.dsn) as session_factory,
+        session_factory() as session,
+    ):
         source = Source(
             source_id=uuid4(),
             source_type="filesystem",
@@ -60,8 +67,10 @@ async def test_source_create_and_fetch(postgres_component: Any) -> None:
 
 
 async def test_document_version_cascade(postgres_component: Any) -> None:
-    session_factory = await _setup_postgres(postgres_component.dsn)
-    async with session_factory() as session:
+    async with (
+        _setup_postgres(postgres_component.dsn) as session_factory,
+        session_factory() as session,
+    ):
         source = Source(
             source_id=uuid4(),
             source_type="filesystem",
@@ -122,7 +131,7 @@ async def test_entity_create_and_fetch(neo4j_component: Any) -> None:
             entity_type="Service",
             canonical_name="API Gateway",
             aliases=["api-gateway", "gateway"],
-            attributes={"region": "us-east-1"},
+            attributes={},
         )
         await repo.create_entity(entity)
 
@@ -142,9 +151,19 @@ async def test_fact_create_and_fetch(neo4j_component: Any) -> None:
         repo = Neo4jGraphRepository(driver)
 
         subject = CanonicalEntity(
-            entity_id=uuid4(), entity_type="Service", canonical_name="Service A"
+            entity_id=uuid4(),
+            entity_type="Service",
+            canonical_name="Service A",
+            aliases=[],
+            attributes={},
         )
-        obj = CanonicalEntity(entity_id=uuid4(), entity_type="Service", canonical_name="Service B")
+        obj = CanonicalEntity(
+            entity_id=uuid4(),
+            entity_type="Service",
+            canonical_name="Service B",
+            aliases=[],
+            attributes={},
+        )
         await repo.create_entity(subject)
         await repo.create_entity(obj)
 
@@ -171,8 +190,10 @@ async def test_fact_create_and_fetch(neo4j_component: Any) -> None:
 
 
 async def test_outbox_claim_pattern(postgres_component: Any) -> None:
-    session_factory = await _setup_postgres(postgres_component.dsn)
-    async with session_factory() as session:
+    async with (
+        _setup_postgres(postgres_component.dsn) as session_factory,
+        session_factory() as session,
+    ):
         event = Outbox(
             event_id=uuid4(),
             aggregate_type="document",
