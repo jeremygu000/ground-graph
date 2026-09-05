@@ -41,7 +41,9 @@ class PostgresDocumentRepository(DocumentRepository):
         return source
 
     async def get_source(self, source_id: UUID) -> SourceDescriptor | None:
-        result = await self._session.execute(select(SourceModel).where(SourceModel.source_id == source_id))
+        result = await self._session.execute(
+            select(SourceModel).where(SourceModel.source_id == source_id)
+        )
         row = result.scalar_one_or_none()
         return self._source_to_domain(row) if row else None
 
@@ -72,7 +74,9 @@ class PostgresDocumentRepository(DocumentRepository):
         return document
 
     async def get_document(self, document_id: UUID) -> ParsedDocument | None:
-        result = await self._session.execute(select(DocumentModel).where(DocumentModel.document_id == document_id))
+        result = await self._session.execute(
+            select(DocumentModel).where(DocumentModel.document_id == document_id)
+        )
         row = result.scalar_one_or_none()
         if row is None:
             return None
@@ -110,7 +114,10 @@ class PostgresDocumentRepository(DocumentRepository):
             .where(DocumentVersionModel.document_id == document_id)
             .order_by(DocumentVersionModel.created_at)
         )
-        return [self._document_version_to_domain(document, version) for version in result.scalars().all()]
+        return [
+            self._document_version_to_domain(document, version)
+            for version in result.scalars().all()
+        ]
 
     async def create_chunk(self, chunk: Chunk) -> Chunk:
         model = ChunkModel(
@@ -131,7 +138,9 @@ class PostgresDocumentRepository(DocumentRepository):
         return chunk
 
     async def get_chunk(self, chunk_id: UUID) -> Chunk | None:
-        result = await self._session.execute(select(ChunkModel).where(ChunkModel.chunk_id == chunk_id))
+        result = await self._session.execute(
+            select(ChunkModel).where(ChunkModel.chunk_id == chunk_id)
+        )
         row = result.scalar_one_or_none()
         return self._chunk_to_domain(row) if row else None
 
@@ -145,7 +154,9 @@ class PostgresDocumentRepository(DocumentRepository):
         return [self._chunk_to_domain(row) for row in result.scalars().all()]
 
     async def delete_document(self, document_id: UUID) -> None:
-        await self._session.execute(delete(DocumentModel).where(DocumentModel.document_id == document_id))
+        await self._session.execute(
+            delete(DocumentModel).where(DocumentModel.document_id == document_id)
+        )
 
     async def _get_current_version(
         self, document_id: UUID, current_version_id: UUID | None

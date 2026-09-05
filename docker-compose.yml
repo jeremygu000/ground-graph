@@ -97,8 +97,8 @@ services:
       NEO4J_server_memory_heap_max__size: 512m
       NEO4J_server_memory_pagecache_size: 256m
     ports:
-      - "127.0.0.1:7474:7474"
-      - "127.0.0.1:7687:7687"
+      - "127.0.0.1:${NEO4J_HTTP_PORT:-7474}:7474"
+      - "127.0.0.1:${NEO4J_BOLT_PORT:-7687}:7687"
     volumes:
       - neo4j-data:/data
       - neo4j-logs:/logs
@@ -128,8 +128,8 @@ services:
       MINIO_ROOT_USER: ${S3_ACCESS_KEY:-change-me-local-only}
       MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-change-me-local-only}
     ports:
-      - "127.0.0.1:9000:9000"
-      - "127.0.0.1:9001:9001"
+      - "127.0.0.1:${MINIO_PORT:-9000}:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001"
     volumes:
       - minio-data:/data
     healthcheck:
@@ -181,11 +181,11 @@ services:
     volumes:
       - ./deploy/docker/otel/collector-config.yaml:/etc/otelcol/config.yaml:ro
     ports:
-      - "127.0.0.1:4317:4317"
-      - "127.0.0.1:4318:4318"
-      - "127.0.0.1:13133:13133"   # health_check extension endpoint
-      - "127.0.0.1:8888:8888"     # internal metrics
-      - "127.0.0.1:8889:8889"     # app metrics (Prometheus exporter)
+      - "127.0.0.1:${OTEL_GRPC_PORT:-4317}:4317"
+      - "127.0.0.1:${OTEL_HTTP_PORT:-4318}:4318"
+      - "127.0.0.1:${OTEL_HEALTH_PORT:-13133}:13133"   # health_check extension endpoint
+      - "127.0.0.1:${OTEL_INTERNAL_METRICS_PORT:-8888}:8888"     # internal metrics
+      - "127.0.0.1:${OTEL_APP_METRICS_PORT:-8889}:8889"     # app metrics (Prometheus exporter)
     depends_on:
       phoenix:
         condition: service_started
@@ -240,11 +240,11 @@ services:
       # M1.2: enable Phoenix's built-in Prometheus metrics endpoint
       PHOENIX_ENABLE_PROMETHEUS: "true"
     ports:
-      - "127.0.0.1:6006:6006"
+      - "127.0.0.1:${PHOENIX_PORT:-6006}:6006"
       # Phoenix Prometheus metrics: bind to a different host port to
       # avoid colliding with the local Prometheus server. The container
       # still listens on its default 9090.
-      - "127.0.0.1:9091:9090"   # Phoenix Prometheus metrics (M1.2)
+      - "127.0.0.1:${PHOENIX_PROMETHEUS_PORT:-9091}:9090"   # Phoenix Prometheus metrics (M1.2)
     depends_on:
       postgres:
         condition: service_healthy
@@ -278,7 +278,7 @@ services:
       - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
     ports:
-      - "127.0.0.1:9090:9090"
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
     depends_on:
       otel-probe:
         condition: service_completed_successfully
@@ -308,7 +308,7 @@ services:
       - ./deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro
       - grafana-data:/var/lib/grafana
     ports:
-      - "127.0.0.1:3001:3000"
+      - "127.0.0.1:${GRAFANA_PORT:-3001}:3000"
     depends_on:
       prometheus:
         condition: service_healthy

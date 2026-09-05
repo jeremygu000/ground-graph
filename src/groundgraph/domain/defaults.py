@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from groundgraph.domain.types import JsonValue
-
 
 def empty_str_list() -> list[str]:
     return []
@@ -15,7 +13,7 @@ def empty_uuid_list() -> list[Any]:
     return []
 
 
-def empty_json_dict() -> dict[str, JsonValue]:
+def empty_json_dict() -> dict[str, object]:
     return {}
 
 

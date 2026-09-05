@@ -17,7 +17,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from groundgraph.domain.defaults import empty_json_dict, empty_uuid_list
-from groundgraph.domain.types import JsonValue, validate_json_value
+from groundgraph.domain.types import validate_json_value
 
 
 class ExecutionRunStatus(StrEnum):
@@ -91,8 +91,8 @@ class ExecutionRun(BaseModel):
     status: ExecutionRunStatus
     principal: str
     tenant_id: str
-    input: dict[str, JsonValue] = Field(default_factory=empty_json_dict)
-    output: dict[str, JsonValue] = Field(default_factory=empty_json_dict)
+    input: dict[str, object] = Field(default_factory=empty_json_dict)
+    output: dict[str, object] = Field(default_factory=empty_json_dict)
     started_at: datetime | None = None
     finished_at: datetime | None = None
     error_code: str | None = None
@@ -134,8 +134,8 @@ class ExecutionStep(BaseModel):
     status: ExecutionStepStatus
     attempt: int = Field(default=1, ge=1)
     depends_on: list[UUID] = Field(default_factory=empty_uuid_list)
-    input: dict[str, JsonValue] = Field(default_factory=empty_json_dict)
-    output: dict[str, JsonValue] = Field(default_factory=empty_json_dict)
+    input: dict[str, object] = Field(default_factory=empty_json_dict)
+    output: dict[str, object] = Field(default_factory=empty_json_dict)
     started_at: datetime | None = None
     finished_at: datetime | None = None
     error_code: str | None = None
@@ -143,7 +143,7 @@ class ExecutionStep(BaseModel):
 
     @field_validator("input", "output", mode="before")
     @classmethod
-    def _validate_json_fields(cls, value: object) -> object:
+    def _validate_json_fields_step(cls, value: object) -> object:
         return validate_json_value(value)
 
 

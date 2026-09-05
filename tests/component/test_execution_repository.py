@@ -11,6 +11,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from groundgraph.application.errors import InvalidTransitionError, NotFoundError
 from groundgraph.domain.execution import (
     ExecutionRun,
     ExecutionRunStatus,
@@ -90,7 +91,7 @@ async def test_invalid_run_and_step_transitions(postgres_component: Any) -> None
         )
         await repo.create_run(run)
 
-        with pytest.raises(ValueError, match="illegal execution_run transition"):
+        with pytest.raises(InvalidTransitionError, match="illegal execution_run transition"):
             await repo.update_run_status(
                 run.run_id,
                 ExecutionRunStatus.PENDING,
@@ -106,7 +107,7 @@ async def test_invalid_run_and_step_transitions(postgres_component: Any) -> None
         )
         await repo.create_step(step)
 
-        with pytest.raises(ValueError, match="illegal execution_step transition"):
+        with pytest.raises(InvalidTransitionError, match="illegal execution_step transition"):
             await repo.update_step_status(
                 step.step_id,
                 ExecutionStepStatus.PENDING,
@@ -183,12 +184,12 @@ async def test_missing_run_and_step_update_errors(postgres_component: Any) -> No
     ):
         repo = ExecutionRepository(cast(PostgresSession, session))
 
-        with pytest.raises(ValueError, match=r"ExecutionRun .* not found"):
+        with pytest.raises(NotFoundError, match=r"ExecutionRun .* not found"):
             await repo.update_run_status(
                 uuid4(), ExecutionRunStatus.PENDING, ExecutionRunStatus.RUNNING
             )
 
-        with pytest.raises(ValueError, match=r"ExecutionStep .* not found"):
+        with pytest.raises(NotFoundError, match=r"ExecutionStep .* not found"):
             await repo.update_step_status(
                 uuid4(), ExecutionStepStatus.PENDING, ExecutionStepStatus.RUNNING
             )

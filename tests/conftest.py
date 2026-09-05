@@ -14,6 +14,7 @@ import asyncio
 import json
 import os
 import shutil
+import socket
 import subprocess
 import time
 from collections.abc import AsyncGenerator, Generator
@@ -82,13 +83,42 @@ class StackServices:
         }
 
 
-def _run_compose(args: list[str], timeout: int = 60) -> subprocess.CompletedProcess[str]:
+def _run_compose(
+    args: list[str],
+    timeout: int = 60,
+    *,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
     cmd = ["docker", "compose", "-f", DOCKER_COMPOSE_FILE, *args]
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
+    merged_env = os.environ.copy()
+    if env is not None:
+        merged_env.update(env)
+    return subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+        env=merged_env,
+    )
 
 
-def _compose_services() -> list[dict[str, Any]]:
-    result = _run_compose(["ps", "--format", "json"])
+def _pick_free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+def _pick_unique_free_port(used_ports: set[int]) -> int:
+    while True:
+        port = _pick_free_port()
+        if port not in used_ports:
+            used_ports.add(port)
+            return port
+
+
+def _compose_services(compose_env: dict[str, str]) -> list[dict[str, Any]]:
+    result = _run_compose(["ps", "--format", "json"], timeout=60, env=compose_env)
     if result.returncode != 0:
         return []
     lines = result.stdout.strip().split("\n")
@@ -100,7 +130,12 @@ def _compose_services() -> list[dict[str, Any]]:
     return services
 
 
-def _wait_for_stack_healthy(timeout: int = 180) -> StackServices:
+def _wait_for_stack_healthy(
+    compose_env: dict[str, str],
+    *,
+    stack: StackServices,
+    timeout: int = 180,
+) -> StackServices:
     """Wait until all expected services are running and healthy.
 
     For services that declare a container healthcheck, both
@@ -112,7 +147,7 @@ def _wait_for_stack_healthy(timeout: int = 180) -> StackServices:
     last_error: str | None = None
 
     while time.monotonic() < deadline:
-        services = _compose_services()
+        services = _compose_services(compose_env)
         if not services:
             time.sleep(2)
             continue
@@ -142,20 +177,20 @@ def _wait_for_stack_healthy(timeout: int = 180) -> StackServices:
             break
 
         try:
-            _run_compose(["ps", "--format", "json"], timeout=10)
+            _run_compose(["ps", "--format", "json"], timeout=10, env=compose_env)
         except Exception as exc:
             last_error = str(exc)
 
         time.sleep(3)
     else:
-        services = _compose_services()
+        services = _compose_services(compose_env)
         raise RuntimeError(
             f"Docker compose services did not become healthy within {timeout}s.\n"
             f"Last error: {last_error}\n"
             f"Running services: {services}"
         )
 
-    return StackServices()
+    return stack
 
 
 @pytest.fixture(scope="session")
@@ -185,17 +220,64 @@ def docker_stack() -> Generator[StackServices, None, None]:
             f"stderr: {docker_info.stderr}"
         )
 
-    compose_up = _run_compose(["up", "-d"], timeout=120)
+    used_ports: set[int] = set()
+    postgres_port = _pick_unique_free_port(used_ports)
+    neo4j_http_port = _pick_unique_free_port(used_ports)
+    neo4j_bolt_port = _pick_unique_free_port(used_ports)
+    minio_port = _pick_unique_free_port(used_ports)
+    minio_console_port = _pick_unique_free_port(used_ports)
+    otel_grpc_port = _pick_unique_free_port(used_ports)
+    otel_http_port = _pick_unique_free_port(used_ports)
+    otel_health_port = _pick_unique_free_port(used_ports)
+    otel_internal_metrics_port = _pick_unique_free_port(used_ports)
+    otel_app_metrics_port = _pick_unique_free_port(used_ports)
+    phoenix_port = _pick_unique_free_port(used_ports)
+    phoenix_prometheus_port = _pick_unique_free_port(used_ports)
+    prometheus_port = _pick_unique_free_port(used_ports)
+    grafana_port = _pick_unique_free_port(used_ports)
+
+    compose_env = {
+        "POSTGRES_PORT": str(postgres_port),
+        "NEO4J_HTTP_PORT": str(neo4j_http_port),
+        "NEO4J_BOLT_PORT": str(neo4j_bolt_port),
+        "MINIO_PORT": str(minio_port),
+        "MINIO_CONSOLE_PORT": str(minio_console_port),
+        "OTEL_GRPC_PORT": str(otel_grpc_port),
+        "OTEL_HTTP_PORT": str(otel_http_port),
+        "OTEL_HEALTH_PORT": str(otel_health_port),
+        "OTEL_INTERNAL_METRICS_PORT": str(otel_internal_metrics_port),
+        "OTEL_APP_METRICS_PORT": str(otel_app_metrics_port),
+        "PHOENIX_PORT": str(phoenix_port),
+        "PHOENIX_PROMETHEUS_PORT": str(phoenix_prometheus_port),
+        "PROMETHEUS_PORT": str(prometheus_port),
+        "GRAFANA_PORT": str(grafana_port),
+    }
+
+    stack = StackServices(
+        postgres_port=postgres_port,
+        neo4j_port=neo4j_bolt_port,
+        minio_port=minio_port,
+        otel_collector_port=otel_grpc_port,
+        phoenix_port=phoenix_port,
+        prometheus_port=prometheus_port,
+        grafana_port=grafana_port,
+    )
+
+    compose_up = _run_compose(["up", "-d"], timeout=120, env=compose_env)
     if compose_up.returncode != 0:
         pytest.fail(
             f"docker compose up failed:\nstdout: {compose_up.stdout}\nstderr: {compose_up.stderr}"
         )
 
     try:
-        services = _wait_for_stack_healthy(timeout=180)
+        services = _wait_for_stack_healthy(
+            compose_env,
+            stack=stack,
+            timeout=180,
+        )
         yield services
     finally:
-        _run_compose(["down"], timeout=60)
+        _run_compose(["down"], timeout=60, env=compose_env)
 
 
 async def _wait_for_app(base_url: str, timeout_sec: float = 45.0) -> bool:

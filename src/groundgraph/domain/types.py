@@ -8,32 +8,19 @@ allowed (see AGENTS.md §4).
 from __future__ import annotations
 
 import math
-from typing import TypeAlias
+from typing import cast
+
+type JsonValue = bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"] | None
 
 
-class FrozenJsonList(list[object]):
-    def _immutable(self, *args: object, **kwargs: object) -> None:
-        raise TypeError("JSON containers are immutable once validated")
-
-    append = extend = insert = pop = remove = clear = sort = reverse = _immutable
-    __setitem__ = __delitem__ = __iadd__ = __imul__ = _immutable
-
-
-class FrozenJsonDict(dict[str, object]):
-    def _immutable(self, *args: object, **kwargs: object) -> None:
-        raise TypeError("JSON containers are immutable once validated")
-
-    __setitem__ = __delitem__ = clear = pop = popitem = setdefault = update = _immutable
-
-
-JsonValue: TypeAlias = bool | int | float | str | None | FrozenJsonList | FrozenJsonDict
-
-
-def validate_json_value(value: object) -> object:
+def validate_json_value(value: object) -> JsonValue:
     """Recursively validate that ``value`` is JSON-serialisable.
 
     Raises ``ValueError`` for non-JSON types (class instances, datetime,
     UUID, bytes, NaN/Infinity) or non-string dict keys.
+
+    Immutability is guaranteed by the domain model being ``frozen=True``;
+    this function only guarantees JSON-structure correctness.
     """
     if isinstance(value, (str, int, bool, type(None))):
         return value
@@ -42,16 +29,17 @@ def validate_json_value(value: object) -> object:
             raise ValueError("JSON float must not be NaN or Infinity")
         return value
     if isinstance(value, list):
-        items = FrozenJsonList(validate_json_value(item) for item in value)
-        return items
+        items = cast(list[object], value)
+        return [validate_json_value(item) for item in items]
     if isinstance(value, dict):
-        mapping = FrozenJsonDict()
-        for k, v in value.items():
+        mapping = cast(dict[object, object], value)
+        result: dict[str, JsonValue] = {}
+        for k, v in mapping.items():
             if not isinstance(k, str):
                 msg = "JSON object key must be str, got " + type(k).__name__
                 raise TypeError(msg)
-            dict.__setitem__(mapping, k, validate_json_value(v))
-        return mapping
+            result[k] = validate_json_value(v)
+        return result
     raise ValueError(
         f"JsonValue must be str | int | float | bool | None | list | dict, "
         f"got {type(value).__name__}"

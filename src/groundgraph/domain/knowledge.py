@@ -16,7 +16,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from groundgraph.domain.defaults import empty_json_dict, empty_str_list, empty_uuid_list
-from groundgraph.domain.types import JsonValue, validate_json_value
+from groundgraph.domain.types import validate_json_value
 
 
 class EntityMention(BaseModel):
@@ -50,7 +50,7 @@ class CanonicalEntity(BaseModel):
     entity_type: str
     canonical_name: str
     aliases: list[str] = Field(default_factory=empty_str_list)
-    attributes: dict[str, JsonValue] = Field(default_factory=empty_json_dict)
+    attributes: dict[str, object] = Field(default_factory=empty_json_dict)
 
     @field_validator("attributes", mode="before")
     @classmethod

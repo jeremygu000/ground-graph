@@ -16,7 +16,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from groundgraph.domain.defaults import empty_json_dict
-from groundgraph.domain.types import JsonValue, validate_json_value
+from groundgraph.domain.types import validate_json_value
 
 
 class OutboxEventType(StrEnum):
@@ -56,7 +56,7 @@ class OutboxEvent(BaseModel):
     aggregate_type: str  # "document" | "chunk" | "entity" | "fact"
     aggregate_id: UUID
     event_type: OutboxEventType
-    payload: dict[str, JsonValue] = Field(default_factory=empty_json_dict)
+    payload: dict[str, object] = Field(default_factory=empty_json_dict)
     status: OutboxEventStatus = OutboxEventStatus.PENDING
     attempts: int = Field(default=0, ge=0)
     last_error: str | None = None

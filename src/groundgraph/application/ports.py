@@ -17,7 +17,6 @@ from groundgraph.domain.evidence import OutboxEvent
 from groundgraph.domain.execution import ExecutionRun, ExecutionStep
 from groundgraph.domain.knowledge import CanonicalEntity, EntityMention, KnowledgeFact
 from groundgraph.domain.retrieval import Evidence, QueryResponse, RetrievalPlan
-from groundgraph.domain.types import JsonValue
 
 if TYPE_CHECKING:
     from uuid import UUID
@@ -205,9 +204,19 @@ class TelemetryRecorder(Protocol):
 class EvaluationRepository(Protocol):
     """Port for evaluation result persistence."""
 
-    async def create_run(self, run_id: UUID, dataset_id: UUID, config: JsonValue) -> None: ...
+    async def create_run(
+        self,
+        run_id: UUID,
+        dataset_id: UUID,
+        config: dict[str, Any] | list[Any] | str | int | float | bool | None,
+    ) -> None: ...
 
-    async def store_result(self, run_id: UUID, case_id: str, result: JsonValue) -> None: ...
+    async def store_result(
+        self,
+        run_id: UUID,
+        case_id: str,
+        result: dict[str, Any] | list[Any] | str | int | float | bool | None,
+    ) -> None: ...
 
     async def get_run(self, run_id: UUID) -> dict[str, Any] | None: ...
 

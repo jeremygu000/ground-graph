@@ -9,7 +9,11 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from groundgraph.application.errors import ConcurrencyConflictError, InvalidTransitionError, NotFoundError
+from groundgraph.application.errors import (
+    ConcurrencyConflictError,
+    InvalidTransitionError,
+    NotFoundError,
+)
 from groundgraph.domain.execution import (
     ExecutionRun,
     ExecutionRunStatus,
@@ -243,10 +247,14 @@ async def test_execution_repository_invalid_updates_and_reconstruct_missing_run(
     repo = ExecutionRepository(session)
 
     with pytest.raises(NotFoundError, match=r"ExecutionRun .* not found"):
-        await repo.update_run_status(uuid4(), ExecutionRunStatus.PENDING, ExecutionRunStatus.RUNNING)
+        await repo.update_run_status(
+            uuid4(), ExecutionRunStatus.PENDING, ExecutionRunStatus.RUNNING
+        )
 
     with pytest.raises(NotFoundError, match=r"ExecutionStep .* not found"):
-        await repo.update_step_status(uuid4(), ExecutionStepStatus.PENDING, ExecutionStepStatus.RUNNING)
+        await repo.update_step_status(
+            uuid4(), ExecutionStepStatus.PENDING, ExecutionStepStatus.RUNNING
+        )
 
     with pytest.raises(ValueError, match=r"ExecutionRun .* not found"):
         await repo.reconstruct_dag(uuid4())
@@ -332,10 +340,14 @@ async def test_execution_repository_invalid_transition_rejected_before_write() -
     repo = ExecutionRepository(session)
 
     with pytest.raises(InvalidTransitionError):
-        await repo.update_run_status(uuid4(), ExecutionRunStatus.PENDING, ExecutionRunStatus.SUCCEEDED)
+        await repo.update_run_status(
+            uuid4(), ExecutionRunStatus.PENDING, ExecutionRunStatus.SUCCEEDED
+        )
 
     with pytest.raises(InvalidTransitionError):
-        await repo.update_step_status(uuid4(), ExecutionStepStatus.PENDING, ExecutionStepStatus.SUCCEEDED)
+        await repo.update_step_status(
+            uuid4(), ExecutionStepStatus.PENDING, ExecutionStepStatus.SUCCEEDED
+        )
 
 
 @pytest.mark.asyncio
@@ -346,7 +358,9 @@ async def test_execution_repository_conflict_when_expected_status_mismatches() -
     run_id = uuid4()
     session.get_map = {
         (
-            __import__("groundgraph.infrastructure.postgres.models", fromlist=["ExecutionRun"]).ExecutionRun,
+            __import__(
+                "groundgraph.infrastructure.postgres.models", fromlist=["ExecutionRun"]
+            ).ExecutionRun,
             run_id,
         ): _RunRow(
             run_id=run_id,

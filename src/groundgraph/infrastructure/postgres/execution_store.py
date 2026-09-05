@@ -23,7 +23,6 @@ from groundgraph.domain.execution import (
     ExecutionRunStatus,
     ExecutionStep,
     ExecutionStepStatus,
-    assert_run_transition,
 )
 from groundgraph.infrastructure.postgres.models import ExecutionRun as SQLExecutionRun
 from groundgraph.infrastructure.postgres.models import ExecutionStep as SQLExecutionStep

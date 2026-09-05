@@ -16,21 +16,26 @@ from neo4j import AsyncGraphDatabase
 from sqlalchemy import delete, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from groundgraph.domain.documents import Chunk, ParsedDocument, SourceDescriptor
 from groundgraph.domain.execution import ExecutionRun, ExecutionRunStatus
-from groundgraph.domain.documents import ParsedDocument, SourceDescriptor
 from groundgraph.domain.knowledge import CanonicalEntity, KnowledgeFact
 from groundgraph.infrastructure.neo4j.repository import Neo4jGraphRepository
+from groundgraph.infrastructure.postgres.document_repository import PostgresDocumentRepository
 from groundgraph.infrastructure.postgres.models import (
     Base as PostgresBase,
 )
 from groundgraph.infrastructure.postgres.models import (
-    Chunk,
-    Document,
-    DocumentVersion,
-    Outbox,
-    Source,
+    Document as SqlDocument,
 )
-from groundgraph.infrastructure.postgres.document_repository import PostgresDocumentRepository
+from groundgraph.infrastructure.postgres.models import (
+    DocumentVersion as SqlDocumentVersion,
+)
+from groundgraph.infrastructure.postgres.models import (
+    Outbox as SqlOutbox,
+)
+from groundgraph.infrastructure.postgres.models import (
+    Source as SqlSource,
+)
 from groundgraph.infrastructure.postgres.outbox_repository import (
     PostgresOutboxRepository,
 )
@@ -60,7 +65,7 @@ async def test_source_create_and_fetch(postgres_component: Any) -> None:
         session_factory() as session,
     ):
         repo = PostgresDocumentRepository(cast(PostgresSession, session))
-        source = Source(
+        source = SqlSource(
             source_id=uuid4(),
             source_type="filesystem",
             uri="/path/to/docs",
@@ -152,12 +157,182 @@ async def test_document_repository_crud(postgres_component: Any) -> None:
         assert len(chunks) == 1
 
 
+async def test_source_lifecycle_and_list_sources(postgres_component: Any) -> None:
+    async with (
+        _setup_postgres(postgres_component.dsn) as session_factory,
+        session_factory() as session,
+    ):
+        repo = PostgresDocumentRepository(cast(PostgresSession, session))
+
+        source_a = SourceDescriptor(
+            source_id=uuid4(),
+            source_type="filesystem",
+            uri="/docs/a",
+            classification="internal",
+            tenant_id="tenant-a",
+            allowed_principals=["engineering"],
+        )
+        source_b = SourceDescriptor(
+            source_id=uuid4(),
+            source_type="filesystem",
+            uri="/docs/b",
+            classification="restricted",
+            tenant_id="tenant-b",
+            allowed_principals=["security"],
+        )
+
+        await repo.create_source(source_a)
+        await repo.create_source(source_b)
+        await session.commit()
+
+        loaded = await repo.get_source(source_a.source_id)
+        assert loaded is not None
+        assert loaded.uri == "/docs/a"
+        assert loaded.classification == "internal"
+        assert loaded.allowed_principals == ["engineering"]
+
+        sources = await repo.list_sources()
+        source_ids = {source.source_id for source in sources}
+        assert source_a.source_id in source_ids
+        assert source_b.source_id in source_ids
+
+
+async def test_document_current_version_fallback_and_delete(
+    postgres_component: Any,
+) -> None:
+    async with (
+        _setup_postgres(postgres_component.dsn) as session_factory,
+        session_factory() as session,
+    ):
+        repo = PostgresDocumentRepository(cast(PostgresSession, session))
+
+        source = SourceDescriptor(
+            source_id=uuid4(),
+            source_type="filesystem",
+            uri="/docs",
+            classification="internal",
+            tenant_id="tenant-a",
+        )
+        await repo.create_source(source)
+
+        document = ParsedDocument(
+            document_id=uuid4(),
+            version_id=uuid4(),
+            source_id=source.source_id,
+            title="Fallback Doc",
+            media_type="text/markdown",
+            checksum="abc123",
+            content="# Fallback",
+            metadata={"author": "test"},
+            effective_at=datetime(2024, 1, 1, tzinfo=UTC),
+        )
+        await repo.create_document(document)
+        await session.commit()
+
+        loaded = await repo.get_document(document.document_id)
+        assert loaded is not None
+        assert loaded.version_id == document.version_id
+
+        await session.execute(
+            update(SqlDocument)
+            .where(SqlDocument.document_id == document.document_id)
+            .values(current_version_id=None)
+        )
+        await session.commit()
+
+        fallback_loaded = await repo.get_document(document.document_id)
+        assert fallback_loaded is not None
+        assert fallback_loaded.version_id == document.version_id
+        assert fallback_loaded.title == "Fallback Doc"
+
+        version = await repo.get_document_version(document.document_id, document.version_id)
+        assert version is not None
+        assert version.checksum == "abc123"
+
+        versions = await repo.list_document_versions(document.document_id)
+        assert len(versions) == 1
+        assert versions[0].version_id == document.version_id
+
+        await repo.delete_document(document.document_id)
+        await session.commit()
+
+        assert await session.get(SqlDocument, document.document_id) is None
+        assert await session.get(SqlDocumentVersion, document.version_id) is None
+
+
+async def test_chunk_lifecycle_and_listing(postgres_component: Any) -> None:
+    async with (
+        _setup_postgres(postgres_component.dsn) as session_factory,
+        session_factory() as session,
+    ):
+        repo = PostgresDocumentRepository(cast(PostgresSession, session))
+
+        source = SourceDescriptor(
+            source_id=uuid4(),
+            source_type="filesystem",
+            uri="/docs",
+            classification="internal",
+            tenant_id="tenant-a",
+        )
+        await repo.create_source(source)
+
+        document = ParsedDocument(
+            document_id=uuid4(),
+            version_id=uuid4(),
+            source_id=source.source_id,
+            title="Chunked Doc",
+            media_type="text/markdown",
+            checksum="chunky-1",
+            content="# Chunked",
+            metadata={"author": "test"},
+            effective_at=datetime(2024, 1, 1, tzinfo=UTC),
+        )
+        await repo.create_document(document)
+
+        chunk_late = Chunk(
+            chunk_id=uuid4(),
+            document_id=document.document_id,
+            version_id=document.version_id,
+            ordinal=1,
+            heading_path=["Section 2"],
+            content="Second chunk",
+            token_count=2,
+            checksum="chunk-2",
+            allowed_principals=["engineering"],
+        )
+        chunk_early = Chunk(
+            chunk_id=uuid4(),
+            document_id=document.document_id,
+            version_id=document.version_id,
+            ordinal=0,
+            heading_path=["Section 1"],
+            content="First chunk",
+            token_count=1,
+            checksum="chunk-1",
+            allowed_principals=["engineering"],
+        )
+        await repo.create_chunk(chunk_late)
+        await repo.create_chunk(chunk_early)
+        await session.commit()
+
+        loaded = await repo.get_chunk(chunk_early.chunk_id)
+        assert loaded is not None
+        assert loaded.heading_path == ["Section 1"]
+        assert loaded.allowed_principals == ["engineering"]
+
+        chunks = await repo.list_chunks(document.document_id, document.version_id)
+        assert [chunk.ordinal for chunk in chunks] == [0, 1]
+        assert [chunk.chunk_id for chunk in chunks] == [chunk_early.chunk_id, chunk_late.chunk_id]
+
+        assert await repo.get_chunk(uuid4()) is None
+
+
 async def test_document_version_cascade(postgres_component: Any) -> None:
     async with (
         _setup_postgres(postgres_component.dsn) as session_factory,
         session_factory() as session,
     ):
-        source = Source(
+        source = SqlSource(
             source_id=uuid4(),
             source_type="filesystem",
             uri="/path",
@@ -167,7 +342,7 @@ async def test_document_version_cascade(postgres_component: Any) -> None:
         session.add(source)
         await session.flush()
 
-        doc = Document(
+        doc = SqlDocument(
             document_id=uuid4(),
             source_id=source.source_id,
             title="Test Doc",
@@ -176,7 +351,7 @@ async def test_document_version_cascade(postgres_component: Any) -> None:
         session.add(doc)
         await session.flush()
 
-        version = DocumentVersion(
+        version = SqlDocumentVersion(
             version_id=uuid4(),
             document_id=doc.document_id,
             checksum="abc123",
@@ -188,7 +363,7 @@ async def test_document_version_cascade(postgres_component: Any) -> None:
         await session.commit()
 
         count_result = await session.execute(
-            select(DocumentVersion).where(DocumentVersion.document_id == doc.document_id)
+            select(SqlDocumentVersion).where(SqlDocumentVersion.document_id == doc.document_id)
         )
         versions = count_result.scalars().all()
         assert len(versions) == 1
@@ -377,10 +552,10 @@ async def test_outbox_claim_pattern(postgres_component: Any) -> None:
         _setup_postgres(postgres_component.dsn) as session_factory,
         session_factory() as session,
     ):
-        await session.execute(delete(Outbox))
+        await session.execute(delete(SqlOutbox))
         await session.commit()
 
-        event = Outbox(
+        event = SqlOutbox(
             event_id=uuid4(),
             aggregate_type="document",
             aggregate_id=uuid4(),
@@ -406,14 +581,14 @@ async def test_outbox_claim_pattern(postgres_component: Any) -> None:
         assert claimed_event.attempts == 1
         assert claimed_event.claimed_at is not None
 
-        stored = await session.get(Outbox, event.event_id)
+        stored = await session.get(SqlOutbox, event.event_id)
         assert stored is not None
         assert stored.claimed_by == "worker-a"
         assert stored.claim_token is not None
         token = stored.claim_token
 
         await repo.mark_failed(event.event_id, token, "temporary failure")
-        failed = await session.get(Outbox, event.event_id)
+        failed = await session.get(SqlOutbox, event.event_id)
         assert failed is not None
         assert failed.status == "pending"
         assert failed.attempts == 1
@@ -429,8 +604,8 @@ async def test_outbox_claim_pattern(postgres_component: Any) -> None:
         assert second_claim == []
 
         await session.execute(
-            update(Outbox)
-            .where(Outbox.event_id == event.event_id)
+            update(SqlOutbox)
+            .where(SqlOutbox.event_id == event.event_id)
             .values(available_at=datetime.now(UTC) - timedelta(seconds=1))
         )
         await session.commit()
@@ -442,12 +617,12 @@ async def test_outbox_claim_pattern(postgres_component: Any) -> None:
         )
         assert len(third_claim) == 1
         assert third_claim[0].event_id == event.event_id
-        stored = await session.get(Outbox, event.event_id)
+        stored = await session.get(SqlOutbox, event.event_id)
         assert stored is not None
         assert stored.claimed_by == "worker-b"
 
         await repo.mark_completed(event.event_id, stored.claim_token or "")
-        completed = await session.get(Outbox, event.event_id)
+        completed = await session.get(SqlOutbox, event.event_id)
         assert completed is not None
         assert completed.status == "completed"
         assert completed.completed_at is not None
