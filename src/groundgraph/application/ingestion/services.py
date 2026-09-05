@@ -4,15 +4,25 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID, uuid4
 
-from groundgraph.application.ports import DocumentRepository, ObjectStore
+from groundgraph.application.ports import DocumentRepository, ObjectStore, OutboxRepository
 from groundgraph.domain.documents import ParsedDocument
+from groundgraph.domain.evidence import OutboxEvent, OutboxEventType
 
 from .chunker import Chunker
 from .parsers import ParsedContent, ParserRegistry
+
+
+@dataclass(frozen=True)
+class IngestionResult:
+    document_id: UUID
+    version_id: UUID
+    created_new_version: bool
+    tenant_id: str
 
 
 class IngestionService:
@@ -20,10 +30,12 @@ class IngestionService:
         self,
         documents: DocumentRepository,
         object_store: ObjectStore,
+        outbox_repo: OutboxRepository,
         chunker: Chunker | None = None,
     ) -> None:
         self._documents = documents
         self._object_store = object_store
+        self._outbox = outbox_repo
         self._chunker = chunker or Chunker()
 
     async def ingest_file(
@@ -31,15 +43,14 @@ class IngestionService:
         source_id: UUID,
         file_path: str,
         media_type: str,
-    ) -> tuple[UUID, UUID]:
+    ) -> IngestionResult:
         source = await self._documents.get_source(source_id)
         if source is None:
             raise ValueError(f"source not found: {source_id}")
 
         resolved_path = self._resolve_safe_path(source.uri, file_path)
-
-        raw_bytes = await self._read_file(str(resolved_path))
-        self._check_size(raw_bytes)
+        self._check_size(resolved_path)
+        raw_bytes = await self._read_file(resolved_path)
 
         checksum = self._sha256(raw_bytes)
 
@@ -48,7 +59,12 @@ class IngestionService:
             doc_id, ver_id = existing
             current = await self._documents.get_document_version(doc_id, ver_id)
             if current is not None and current.checksum == checksum:
-                return (doc_id, ver_id)
+                return IngestionResult(
+                    document_id=doc_id,
+                    version_id=ver_id,
+                    created_new_version=False,
+                    tenant_id=source.tenant_id,
+                )
             document_id, version_id = doc_id, uuid4()
         else:
             document_id, version_id = uuid4(), uuid4()
@@ -83,26 +99,49 @@ class IngestionService:
         for chunk in chunks:
             await self._documents.create_chunk(chunk)
 
-        return document_id, version_id
+        event = OutboxEvent(
+            event_id=uuid4(),
+            aggregate_type="document",
+            aggregate_id=document_id,
+            event_type=OutboxEventType.DOCUMENT_PARSED,
+            payload={
+                "document_id": str(document_id),
+                "version_id": str(version_id),
+                "source_id": str(source_id),
+                "tenant_id": source.tenant_id,
+            },
+            created_at=datetime.now(UTC),
+        )
+        await self._outbox.add(event)
+
+        return IngestionResult(
+            document_id=document_id,
+            version_id=version_id,
+            created_new_version=True,
+            tenant_id=source.tenant_id,
+        )
 
     MAX_FILE_SIZE = 100 * 1024 * 1024
 
     def _resolve_safe_path(self, source_root: str, file_path: str) -> Path:
         root = Path(source_root).resolve()
-        requested = Path(file_path).resolve()
-        if not str(requested).startswith(str(root)):
-            raise ValueError(f"file path outside source root: {file_path}")
+        requested = Path(file_path)
         if requested.is_symlink():
-            raise ValueError(f"symlink escape not allowed: {file_path}")
-        return requested
+            raise ValueError(f"symlink not allowed: {file_path}")
+        requested_resolved = requested.resolve()
+        try:
+            requested_resolved.relative_to(root)
+        except ValueError as exc:
+            raise ValueError(f"file path outside source root: {file_path}") from exc
+        return requested_resolved
 
-    def _check_size(self, data: bytes) -> None:
-        if len(data) > self.MAX_FILE_SIZE:
-            raise ValueError(f"file exceeds maximum size: {len(data)} > {self.MAX_FILE_SIZE}")
+    def _check_size(self, path: Path) -> None:
+        size = path.stat().st_size
+        if size > self.MAX_FILE_SIZE:
+            raise ValueError(f"file exceeds maximum size: {size} > {self.MAX_FILE_SIZE}")
 
-    async def _read_file(self, path: str) -> bytes:
-        p = Path(path)
-        return await self._read_async(p)
+    async def _read_file(self, path: Path) -> bytes:
+        return await self._read_async(path)
 
     async def _read_async(self, path: Path) -> bytes:
         def _read() -> bytes:

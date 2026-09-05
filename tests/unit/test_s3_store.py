@@ -8,8 +8,20 @@ from unittest.mock import MagicMock
 from uuid import uuid4
 
 import pytest
+from minio.error import S3Error
 
 from groundgraph.infrastructure.object_storage.s3_store import S3ObjectStore
+
+
+class _FakeS3Error(S3Error):
+    def __init__(self, code: str) -> None:
+        self.code = code
+        self.message = ""
+        self.resource = ""
+        self.request_id = ""
+        self.host_id = ""
+        self.bucket_name = None
+        self.object_name = None
 
 
 class _FakeMinioClient:
@@ -54,7 +66,7 @@ class _FakeMinioClient:
 
     def stat_object(self, bucket: str, key: str) -> Any:
         if key not in self.objects:
-            raise KeyError("Object not found")
+            raise _FakeS3Error("NoSuchKey")
         return MagicMock()
 
 

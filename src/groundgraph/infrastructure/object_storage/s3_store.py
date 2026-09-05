@@ -11,6 +11,7 @@ import io
 from uuid import UUID
 
 from minio import Minio
+from minio.error import S3Error
 
 from groundgraph.application.ports import ObjectStore
 from groundgraph.application.settings import Settings
@@ -65,8 +66,10 @@ class S3ObjectStore(ObjectStore):
         def _exists() -> bool:
             try:
                 self._client.stat_object(self._raw_bucket, key)
-            except Exception:
-                return False
+            except S3Error as e:
+                if e.code in ("NoSuchKey", "NoSuchVersion"):
+                    return False
+                raise
             return True
 
         return await asyncio.to_thread(_exists)

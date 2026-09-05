@@ -10,6 +10,7 @@ import pytest
 from groundgraph.application.ingestion.chunker import Chunker
 from groundgraph.application.ingestion.services import IngestionService
 from groundgraph.domain.documents import Chunk, ParsedDocument, SourceDescriptor
+from groundgraph.domain.evidence import OutboxEvent
 
 
 class _FakeObjectStore:
@@ -18,6 +19,15 @@ class _FakeObjectStore:
 
     async def put_raw(self, key: str, data: bytes, content_type: str | None = None) -> None:
         self.put_raw_calls.append((key, data, content_type))
+
+
+class _FakeOutboxRepository:
+    def __init__(self) -> None:
+        self.events: list[OutboxEvent] = []
+
+    async def add(self, event: OutboxEvent) -> OutboxEvent:
+        self.events.append(event)
+        return event
 
 
 class _FakeDocumentRepository:
@@ -67,9 +77,11 @@ class TestIngestionService:
     def setup_method(self) -> None:
         self.fake_docs: Any = _FakeDocumentRepository()
         self.fake_store: Any = _FakeObjectStore()
+        self.fake_outbox: Any = _FakeOutboxRepository()
         self.service = IngestionService(
             documents=self.fake_docs,
             object_store=self.fake_store,
+            outbox_repo=self.fake_outbox,
             chunker=Chunker(),
         )
 
@@ -88,17 +100,45 @@ class TestIngestionService:
         file_path = tmp_path / "doc.txt"
         file_path.write_bytes(b"# Hello\n\nWorld test.")
 
-        doc_id, ver_id = await self.service.ingest_file(
+        result = await self.service.ingest_file(
             source_id=source_id,
             file_path=str(file_path),
             media_type="text/markdown",
         )
 
-        assert doc_id is not None
-        assert ver_id is not None
+        assert result.document_id is not None
+        assert result.version_id is not None
+        assert result.created_new_version is True
+        assert result.tenant_id == "tenant-a"
         assert len(self.fake_docs.documents) == 1
         assert self.fake_docs.documents[0].title == "Hello"
         assert len(self.fake_store.put_raw_calls) == 1
+
+    async def test_ingest_file_emits_outbox_event(self, tmp_path: Any) -> None:
+        source_id = uuid4()
+        self.fake_docs.set_source(
+            SourceDescriptor(
+                source_id=source_id,
+                source_type="filesystem",
+                uri=str(tmp_path),
+                classification="internal",
+                tenant_id="tenant-b",
+                allowed_principals=["eng"],
+            )
+        )
+        file_path = tmp_path / "doc.txt"
+        file_path.write_bytes(b"Content")
+
+        result = await self.service.ingest_file(
+            source_id=source_id,
+            file_path=str(file_path),
+            media_type="text/plain",
+        )
+
+        assert len(self.fake_outbox.events) == 1
+        event = self.fake_outbox.events[0]
+        assert event.payload["tenant_id"] == "tenant-b"
+        assert event.payload["document_id"] == str(result.document_id)
 
     async def test_ingest_file_stores_chunks(self, tmp_path: Any) -> None:
         source_id = uuid4()
@@ -160,7 +200,7 @@ class TestIngestionService:
                 media_type="text/plain",
             )
 
-    async def test_ingest_file_idempotent_same_checksum(self, tmp_path: Any) -> None:
+    async def test_ingest_file_idempotent_same_checksum_no_outbox(self, tmp_path: Any) -> None:
         source_id = uuid4()
         self.fake_docs.set_source(
             SourceDescriptor(
@@ -175,23 +215,26 @@ class TestIngestionService:
         file_path = tmp_path / "doc.txt"
         file_path.write_bytes(b"Hello world")
 
-        doc1, ver1 = await self.service.ingest_file(
+        result1 = await self.service.ingest_file(
+            source_id=source_id,
+            file_path=str(file_path),
+            media_type="text/plain",
+        )
+        assert result1.created_new_version is True
+        assert len(self.fake_outbox.events) == 1
+
+        self.fake_docs.set_find_result((result1.document_id, result1.version_id))
+
+        result2 = await self.service.ingest_file(
             source_id=source_id,
             file_path=str(file_path),
             media_type="text/plain",
         )
 
-        self.fake_docs.set_find_result((doc1, ver1))
-
-        doc2, ver2 = await self.service.ingest_file(
-            source_id=source_id,
-            file_path=str(file_path),
-            media_type="text/plain",
-        )
-
-        assert doc2 == doc1
-        assert ver2 == ver1
-        assert len(self.fake_docs.documents) == 1
+        assert result2.document_id == result1.document_id
+        assert result2.version_id == result1.version_id
+        assert result2.created_new_version is False
+        assert len(self.fake_outbox.events) == 1
 
     async def test_ingest_file_new_version_on_changed_content(self, tmp_path: Any) -> None:
         source_id = uuid4()
@@ -208,24 +251,71 @@ class TestIngestionService:
         file_path = tmp_path / "doc.txt"
         file_path.write_bytes(b"Version 1 content")
 
-        doc1, ver1 = await self.service.ingest_file(
+        result1 = await self.service.ingest_file(
             source_id=source_id,
             file_path=str(file_path),
             media_type="text/plain",
         )
 
-        self.fake_docs.set_find_result((doc1, ver1))
-        self.fake_docs.set_checksum_override(doc1, ver1, "v1_checksum")
-        self.fake_docs.documents[0].metadata["file_path"] = str(file_path)
+        self.fake_docs.set_find_result((result1.document_id, result1.version_id))
+        self.fake_docs.set_checksum_override(result1.document_id, result1.version_id, "v1_checksum")
 
         file_path.write_bytes(b"Version 2 content, different!")
 
-        doc2, ver2 = await self.service.ingest_file(
+        result2 = await self.service.ingest_file(
             source_id=source_id,
             file_path=str(file_path),
             media_type="text/plain",
         )
 
-        assert doc2 == doc1
-        assert ver2 != ver1
+        assert result2.document_id == result1.document_id
+        assert result2.version_id != result1.version_id
+        assert result2.created_new_version is True
         assert len(self.fake_docs.documents) == 2
+        assert len(self.fake_outbox.events) == 2
+
+    async def test_ingest_file_path_escape_rejected(self, tmp_path: Any) -> None:
+        source_id = uuid4()
+        self.fake_docs.set_source(
+            SourceDescriptor(
+                source_id=source_id,
+                source_type="filesystem",
+                uri=str(tmp_path),
+                classification="internal",
+                tenant_id="tenant-a",
+                allowed_principals=["engineering"],
+            )
+        )
+        evil = tmp_path.parent / "evil.txt"
+        evil.write_bytes(b"secret")
+
+        with pytest.raises(ValueError, match="outside source root"):
+            await self.service.ingest_file(
+                source_id=source_id,
+                file_path=str(evil),
+                media_type="text/plain",
+            )
+
+    async def test_ingest_file_symlink_rejected(self, tmp_path: Any) -> None:
+        source_id = uuid4()
+        self.fake_docs.set_source(
+            SourceDescriptor(
+                source_id=source_id,
+                source_type="filesystem",
+                uri=str(tmp_path),
+                classification="internal",
+                tenant_id="tenant-a",
+                allowed_principals=["engineering"],
+            )
+        )
+        target = tmp_path / "target.txt"
+        target.write_bytes(b"secret")
+        link = tmp_path / "link.txt"
+        link.symlink_to(target)
+
+        with pytest.raises(ValueError, match="symlink not allowed"):
+            await self.service.ingest_file(
+                source_id=source_id,
+                file_path=str(link),
+                media_type="text/plain",
+            )
