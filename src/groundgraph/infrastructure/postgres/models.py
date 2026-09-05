@@ -176,9 +176,13 @@ class Chunk(Base):
 
     document: Mapped[Document] = relationship("Document", back_populates="chunks")
     version: Mapped[DocumentVersion] = relationship("DocumentVersion", back_populates="chunks")
-    embedding: Mapped[ChunkEmbedding | None] = relationship(
-        "ChunkEmbedding", back_populates="chunk", uselist=False, cascade="all, delete-orphan"
+    embeddings: Mapped[list[ChunkEmbedding]] = relationship(
+        "ChunkEmbedding", back_populates="chunk", cascade="all, delete-orphan"
     )
+
+    @property
+    def embedding(self) -> ChunkEmbedding | None:
+        return self.embeddings[0] if self.embeddings else None
 
     __table_args__ = (
         Index("ix_chunks_document_id", "document_id"),
@@ -193,17 +197,15 @@ class ChunkEmbedding(Base):
     chunk_id: Mapped[UUID] = mapped_column(
         PG_UUID, ForeignKey("chunks.chunk_id", ondelete="CASCADE"), primary_key=True
     )
+    index_version_id: Mapped[UUID] = mapped_column(
+        PG_UUID, ForeignKey("index_versions.version_id", ondelete="CASCADE"), primary_key=True
+    )
     embedding: Mapped[list[float]] = mapped_column(VECTOR, nullable=False)
-    embedding_model: Mapped[str] = mapped_column(String(100), nullable=False)
-    embedding_dimensions: Mapped[int] = mapped_column(Integer, nullable=False)
-    index_version: Mapped[str] = mapped_column(String(50), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
-    chunk: Mapped[Chunk] = relationship("Chunk", back_populates="embedding")
-
-    __table_args__ = (Index("ix_chunk_embeddings_index_version", "index_version"),)
+    chunk: Mapped[Chunk] = relationship("Chunk", back_populates="embeddings")
 
 
 class IngestionRun(Base):

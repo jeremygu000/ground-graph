@@ -63,6 +63,19 @@ class ExecutionStepStatus(StrEnum):
     SKIPPED = "skipped"
 
 
+ALLOWED_STEP_TRANSITIONS: dict[ExecutionStepStatus, set[ExecutionStepStatus]] = {
+    ExecutionStepStatus.PENDING: {ExecutionStepStatus.RUNNING, ExecutionStepStatus.SKIPPED},
+    ExecutionStepStatus.RUNNING: {
+        ExecutionStepStatus.SUCCEEDED,
+        ExecutionStepStatus.FAILED,
+        ExecutionStepStatus.SKIPPED,
+    },
+    ExecutionStepStatus.SUCCEEDED: set(),
+    ExecutionStepStatus.FAILED: set(),
+    ExecutionStepStatus.SKIPPED: set(),
+}
+
+
 class ExecutionRun(BaseModel):
     """One query / one workflow invocation, top to bottom.
 

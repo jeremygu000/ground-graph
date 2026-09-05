@@ -42,6 +42,7 @@ class TestDocumentContracts:
             source_type="filesystem",
             uri="/path/to/doc.md",
             classification="internal",
+            tenant_id="default",
             allowed_principals=["engineering", "security"],
         )
         data = source.model_dump()
@@ -88,6 +89,7 @@ class TestDocumentContracts:
             source_type="filesystem",
             uri="/path",
             classification="internal",
+            tenant_id="default",
         )
         with pytest.raises(ValidationError, match="frozen"):
             source.uri = "/other"  # type: ignore

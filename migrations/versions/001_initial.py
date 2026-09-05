@@ -14,6 +14,11 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
+try:
+    from pgvector.sqlalchemy import VECTOR
+except ImportError:  # pragma: no cover
+    VECTOR = None  # type: ignore[assignment, misc]
+
 revision: str = "001_initial"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
@@ -21,6 +26,7 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
+    op.execute("CREATE EXTENSION IF NOT EXISTS vector")
     # sources
     op.create_table(
         "sources",
@@ -159,10 +165,8 @@ def upgrade() -> None:
     op.create_table(
         "chunk_embeddings",
         sa.Column("chunk_id", postgresql.UUID(), nullable=False),
-        sa.Column("embedding", postgresql.VECTOR(dim=1536), nullable=False),
-        sa.Column("embedding_model", sa.String(length=100), nullable=False),
-        sa.Column("embedding_dimensions", sa.Integer(), nullable=False),
-        sa.Column("index_version", sa.String(length=50), nullable=False),
+        sa.Column("index_version_id", postgresql.UUID(), nullable=False),
+        sa.Column("embedding", VECTOR(1536), nullable=False),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -170,9 +174,11 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.ForeignKeyConstraint(["chunk_id"], ["chunks.chunk_id"], ondelete="CASCADE"),
-        sa.PrimaryKeyConstraint("chunk_id"),
+        sa.ForeignKeyConstraint(
+            ["index_version_id"], ["index_versions.version_id"], ondelete="CASCADE"
+        ),
+        sa.PrimaryKeyConstraint("chunk_id", "index_version_id"),
     )
-    op.create_index("ix_chunk_embeddings_index_version", "chunk_embeddings", ["index_version"])
 
     # ingestion_runs
     op.create_table(

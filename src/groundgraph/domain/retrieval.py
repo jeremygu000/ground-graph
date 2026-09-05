@@ -19,7 +19,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from groundgraph.domain.defaults import (
     empty_answer_claim_list,
@@ -117,6 +117,20 @@ class Evidence(BaseModel):
     valid_to: datetime | None = None
     allowed_principals: list[str] = Field(default_factory=empty_str_list)
 
+    @model_validator(mode="after")
+    def _validate_temporal_bounds(self) -> "Evidence":
+        if self.valid_from is not None and self.valid_from.tzinfo is None:
+            raise ValueError("valid_from must be timezone-aware")
+        if self.valid_to is not None and self.valid_to.tzinfo is None:
+            raise ValueError("valid_to must be timezone-aware")
+        if (
+            self.valid_from is not None
+            and self.valid_to is not None
+            and self.valid_to <= self.valid_from
+        ):
+            raise ValueError("valid_to must be greater than valid_from")
+        return self
+
 
 class AnswerClaim(BaseModel):
     """One atomic claim in the answer.
@@ -135,6 +149,17 @@ class AnswerClaim(BaseModel):
     factual: bool
     evidence_ids: list[UUID] = Field(default_factory=empty_uuid_list)
     support_status: Literal["supported", "partially_supported", "unsupported"]
+
+    @model_validator(mode="after")
+    def _validate_evidence_for_support_status(self) -> "AnswerClaim":
+        has_evidence = len(self.evidence_ids) > 0
+        if self.support_status in ("supported", "partially_supported") and not has_evidence:
+            raise ValueError(
+                f"support_status '{self.support_status}' requires at least one evidence_id"
+            )
+        if self.support_status == "unsupported" and has_evidence:
+            raise ValueError("support_status 'unsupported' requires no evidence_ids")
+        return self
 
 
 class QueryResponse(BaseModel):
@@ -161,3 +186,14 @@ class QueryResponse(BaseModel):
     citations: list[Citation] = Field(default_factory=empty_citation_list)
     confidence_band: Literal["high", "medium", "low"]
     warnings: list[str] = Field(default_factory=empty_str_list)
+
+    @model_validator(mode="after")
+    def _validate_answer_status_consistency(self) -> "QueryResponse":
+        if self.status == "answered":
+            if self.answer is None:
+                raise ValueError("answer must be non-None when status is 'answered'")
+            if self.answer == "":
+                raise ValueError("answer must be non-empty when status is 'answered'")
+        elif self.answer is not None:
+            raise ValueError("answer must be None when status is not 'answered'")
+        return self

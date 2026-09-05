@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from groundgraph.domain.defaults import empty_json_dict, empty_str_list, empty_uuid_list
 from groundgraph.domain.types import JsonValue
@@ -81,3 +81,26 @@ class KnowledgeFact(BaseModel):
     observed_at: datetime
     extraction_method: Literal["structured", "rule", "llm", "human"]
     ontology_version: str
+
+    @model_validator(mode="after")
+    def _validate_temporal_consistency(self) -> KnowledgeFact:
+        if self.observed_at.tzinfo is None:
+            raise ValueError("observed_at must be timezone-aware")
+
+        if self.valid_from is not None and self.valid_from.tzinfo is None:
+            raise ValueError("valid_from must be timezone-aware")
+
+        if self.valid_to is not None and self.valid_to.tzinfo is None:
+            raise ValueError("valid_to must be timezone-aware")
+
+        if (
+            self.valid_from is not None
+            and self.valid_to is not None
+            and self.valid_to <= self.valid_from
+        ):
+            raise ValueError("valid_to must be greater than valid_from")
+
+        if self.status == "verified" and len(self.evidence_ids) == 0:
+            raise ValueError("verified facts must have at least one evidence_id")
+
+        return self

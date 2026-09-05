@@ -6,9 +6,10 @@ Pure Pydantic v2 — no infrastructure imports.
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from groundgraph.domain.defaults import empty_json_dict, empty_str_list
 from groundgraph.domain.types import JsonValue
@@ -26,12 +27,17 @@ class SourceDescriptor(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     source_id: UUID
-    source_type: str  # Literal in plan, but we keep it loose to allow
-    # new types (e.g. "kb_search") without breaking deserialisation.
-    # Validation is enforced at the ingestion boundary.
+    source_type: Literal["filesystem", "repository", "object_store", "api"]
     uri: str
     classification: str
+    tenant_id: str
     allowed_principals: list[str] = Field(default_factory=empty_str_list)
+
+    @model_validator(mode="after")
+    def _reject_empty_tenant_id(self) -> SourceDescriptor:
+        if not self.tenant_id:
+            raise ValueError("tenant_id must be non-empty")
+        return self
 
 
 class ParsedDocument(BaseModel):
