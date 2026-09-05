@@ -67,6 +67,12 @@ class _FakeSession:
         self.runs.append((query, params))
         return self.response
 
+    async def execute_read(self, func: Any) -> Any:
+        return await func(self)
+
+    async def execute_write(self, func: Any) -> Any:
+        return await func(self)
+
 
 class _FakeSessionContext:
     def __init__(self, session: _FakeSession) -> None:

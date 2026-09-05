@@ -124,22 +124,40 @@ class Neo4jGraphRepository:
         self._driver = driver
         self._tx = tx
 
-    async def _run_read(self, cypher: str, **params: Any) -> Any:
+    async def _run_read_single(self, cypher: str, **params: Any) -> Any:
         if self._tx is not None:
-            return await self._tx.run(cypher, **params)
+            result = await self._tx.run(cypher, **params)
+            return await result.single()
         async with cast(Any, self._driver.session()) as session:
-            return await session.run(cypher, **params)
+
+            async def _read(tx: Any) -> Any:
+                result = await tx.run(cypher, **params)
+                return await result.single()
+
+            return await session.execute_read(_read)
+
+    async def _run_read_data(self, cypher: str, **params: Any) -> list[dict[str, Any]]:
+        if self._tx is not None:
+            result = await self._tx.run(cypher, **params)
+            return await result.data()
+        async with cast(Any, self._driver.session()) as session:
+
+            async def _read(tx: Any) -> list[dict[str, Any]]:
+                result = await tx.run(cypher, **params)
+                return await result.data()
+
+            return await session.execute_read(_read)
 
     async def _run_write(self, cypher: str, **params: Any) -> None:
         if self._tx is not None:
             await self._tx.run(cypher, **params)
             return
-        async with (
-            cast(Any, self._driver.session()) as session,
-            await session.begin_transaction() as tx,
-        ):
-            await tx.run(cypher, **params)
-            await tx.commit()
+        async with cast(Any, self._driver.session()) as session:
+
+            async def _write(tx: Any) -> None:
+                await tx.run(cypher, **params)
+
+            await session.execute_write(_write)
 
     async def create_entity(self, entity: CanonicalEntity) -> CanonicalEntity:
         params: dict[str, Any] = {
@@ -156,8 +174,7 @@ class Neo4jGraphRepository:
 
     async def get_entity(self, entity_id: UUID) -> CanonicalEntity | None:
         cypher = "MATCH (e:Entity {entity_id: $entity_id}) RETURN e"
-        result = await self._run_read(cypher, entity_id=str(entity_id))
-        record = await result.single()
+        record = await self._run_read_single(cypher, entity_id=str(entity_id))
         if not record:
             return None
         return _dict_to_entity(record)
@@ -166,8 +183,7 @@ class Neo4jGraphRepository:
         self, canonical_name: str | None = None, entity_type: str | None = None
     ) -> list[CanonicalEntity]:
         params: dict[str, Any] = {"canonical_name": canonical_name, "entity_type": entity_type}
-        result = await self._run_read(_ENTITY_FIND, **params)
-        records = await result.data()
+        records = await self._run_read_data(_ENTITY_FIND, **params)
         return [_dict_to_entity(r) for r in records]
 
     async def create_fact(self, fact: KnowledgeFact) -> KnowledgeFact:
@@ -190,8 +206,7 @@ class Neo4jGraphRepository:
 
     async def get_fact(self, fact_id: UUID) -> KnowledgeFact | None:
         cypher = "MATCH (f:Fact {fact_id: $fact_id}) RETURN f"
-        result = await self._run_read(cypher, fact_id=str(fact_id))
-        record = await result.single()
+        record = await self._run_read_single(cypher, fact_id=str(fact_id))
         if not record:
             return None
         return _dict_to_fact(record["f"])
@@ -225,8 +240,7 @@ class Neo4jGraphRepository:
         RETURN f
         LIMIT 100
         """
-        result = await self._run_read(cypher, **params)  # pyright: ignore[reportArgumentType]
-        records = await result.data()
+        records = await self._run_read_data(cypher, **params)
         return [_dict_to_fact(r["f"]) for r in records]
 
     async def update_fact_status(
@@ -263,8 +277,7 @@ class Neo4jGraphRepository:
         MATCH (m:Mention)-[:MENTIONED_IN]->(c:Chunk {chunk_id: $chunk_id})
         RETURN m
         """
-        result = await self._run_read(cypher, chunk_id=str(chunk_id))
-        records = await result.data()
+        records = await self._run_read_data(cypher, chunk_id=str(chunk_id))
         return [
             EntityMention(
                 mention_id=r["m"]["mention_id"],

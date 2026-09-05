@@ -93,7 +93,7 @@ async def test_uow_rolls_back_graph_writes_on_error() -> None:
     session = _FakeSession()
     driver = _FakeDriver(session)
 
-    with pytest.raises(RuntimeError):
+    async def _boom() -> None:
         async with Neo4jUnitOfWork(cast(Any, driver), database="neo4j-test") as uow:
             repo = uow.graph
             assert repo is not None
@@ -108,9 +108,38 @@ async def test_uow_rolls_back_graph_writes_on_error() -> None:
             )
             raise RuntimeError("boom")
 
+    with pytest.raises(RuntimeError):
+        await _boom()
+
     assert driver.session_calls == 1
     assert driver.database_args == ["neo4j-test"]
     assert session.begin_calls == 1
+    assert session.tx.commit_calls == 0
+    assert session.tx.rollback_calls == 1
+    assert session.close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_uow_explicit_commit_does_not_finalize_twice() -> None:
+    session = _FakeSession()
+    driver = _FakeDriver(session)
+
+    async with Neo4jUnitOfWork(cast(Any, driver), database="neo4j-test") as uow:
+        await uow.commit()
+
+    assert session.tx.commit_calls == 1
+    assert session.tx.rollback_calls == 0
+    assert session.close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_uow_explicit_rollback_does_not_finalize_twice() -> None:
+    session = _FakeSession()
+    driver = _FakeDriver(session)
+
+    async with Neo4jUnitOfWork(cast(Any, driver), database="neo4j-test") as uow:
+        await uow.rollback()
+
     assert session.tx.commit_calls == 0
     assert session.tx.rollback_calls == 1
     assert session.close_calls == 1

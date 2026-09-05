@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
@@ -245,3 +246,50 @@ async def test_claim_lease_recovery_across_sessions(postgres_component: Any) -> 
             completed = await worker_b_session.get(Outbox, row.event_id)
             assert completed is not None
             assert completed.status == OutboxEventStatus.COMPLETED.value
+
+
+async def test_claim_batch_competes_across_sessions(postgres_component: Any) -> None:
+    async with _setup_postgres(postgres_component.dsn) as session_factory:
+        async with session_factory() as writer_session:
+            await _truncate_outbox(writer_session)
+            row = await _insert_event(writer_session)
+
+        async with session_factory() as worker_a_session, session_factory() as worker_b_session:
+            repo_a = PostgresOutboxRepository(cast(PostgresSession, worker_a_session))
+            repo_b = PostgresOutboxRepository(cast(PostgresSession, worker_b_session))
+            start = asyncio.Event()
+
+            async def _attempt(
+                repo: PostgresOutboxRepository, session: AsyncSession, worker_id: str
+            ) -> list[OutboxEvent]:
+                await start.wait()
+                claimed = await repo.claim_batch(
+                    batch_size=1,
+                    worker_id=worker_id,
+                    lease_duration_seconds=30,
+                )
+                if claimed:
+                    await session.commit()
+                else:
+                    await session.rollback()
+                return claimed
+
+            task_a = asyncio.create_task(_attempt(repo_a, worker_a_session, "worker-a"))
+            task_b = asyncio.create_task(_attempt(repo_b, worker_b_session, "worker-b"))
+            start.set()
+            claimed_a, claimed_b = await asyncio.gather(task_a, task_b)
+
+            total_claimed = len(claimed_a) + len(claimed_b)
+            assert total_claimed == 1
+            if claimed_a:
+                assert claimed_a[0].event_id == row.event_id
+                assert claimed_b == []
+            else:
+                assert claimed_b[0].event_id == row.event_id
+                assert claimed_a == []
+
+        async with session_factory() as verify_session:
+            stored = await verify_session.get(Outbox, row.event_id)
+            assert stored is not None
+            assert stored.status == OutboxEventStatus.CLAIMED.value
+            assert stored.claimed_by in {"worker-a", "worker-b"}

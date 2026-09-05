@@ -18,6 +18,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from groundgraph.domain.documents import Chunk, ParsedDocument, SourceDescriptor
+from groundgraph.domain.evidence import OutboxEvent, OutboxEventType
 from groundgraph.domain.execution import ExecutionRun, ExecutionRunStatus
 from groundgraph.domain.knowledge import CanonicalEntity, KnowledgeFact
 from groundgraph.infrastructure.neo4j.repository import Neo4jGraphRepository
@@ -45,6 +46,7 @@ from groundgraph.infrastructure.postgres.outbox_repository import (
     PostgresOutboxRepository,
 )
 from groundgraph.infrastructure.postgres.session import PostgresSession
+from groundgraph.infrastructure.postgres.unit_of_work import PostgresUnitOfWork
 
 pytestmark = [pytest.mark.integration, pytest.mark.component]
 
@@ -580,6 +582,64 @@ async def test_document_version_cascade(postgres_component: Any) -> None:
         assert versions[0].checksum == "abc123"
 
 
+async def test_postgres_uow_rolls_back_document_and_outbox(postgres_component: Any) -> None:
+    async with _setup_postgres(postgres_component.dsn) as session_factory:
+        source_id = uuid4()
+        document_id = uuid4()
+        version_id = uuid4()
+        event_id = uuid4()
+
+        async def _boom() -> None:
+            async with PostgresUnitOfWork(session_factory) as uow:
+                docs = uow.documents
+                outbox = uow.outbox
+                assert docs is not None
+                assert outbox is not None
+
+                source = SourceDescriptor(
+                    source_id=source_id,
+                    source_type="filesystem",
+                    uri="/rollback/doc",
+                    classification="internal",
+                    tenant_id="tenant-a",
+                )
+                await docs.create_source(source)
+
+                document = ParsedDocument(
+                    document_id=document_id,
+                    version_id=version_id,
+                    source_id=source_id,
+                    title="Rollback Doc",
+                    media_type="text/markdown",
+                    checksum="rollback-checksum",
+                    content="# rollback",
+                    metadata={"revision": 1},
+                    effective_at=datetime(2024, 1, 1, tzinfo=UTC),
+                )
+                await docs.create_document(document)
+
+                event = OutboxEvent(
+                    event_id=event_id,
+                    aggregate_type="document",
+                    aggregate_id=document_id,
+                    event_type=OutboxEventType.DOCUMENT_PARSED,
+                    payload={"document_id": str(document_id)},
+                    created_at=datetime.now(UTC),
+                )
+                await outbox.add(event)
+
+                raise RuntimeError("boom")
+
+        with pytest.raises(RuntimeError):
+            await _boom()
+
+        async with session_factory() as verify_session:
+            assert await verify_session.get(SqlSource, source_id) is None
+            assert await verify_session.get(SqlDocument, document_id) is None
+            assert await verify_session.get(SqlDocumentVersion, version_id) is None
+            assert await verify_session.get(SqlOutbox, event_id) is None
+
+
 async def test_execution_run_state_machine(postgres_component: Any) -> None:
     run = ExecutionRun(
         run_id=uuid4(),
@@ -759,6 +819,35 @@ async def test_find_facts_datetime_conversion(neo4j_component: Any) -> None:
         assert result.valid_from == valid_from
         assert result.valid_to == valid_to
         assert result.observed_at == observed
+    finally:
+        await driver.close()
+
+
+async def test_neo4j_uow_rolls_back_writes(neo4j_component: Any) -> None:
+    driver = AsyncGraphDatabase.driver(
+        neo4j_component.uri, auth=(neo4j_component.user, neo4j_component.password)
+    )
+    try:
+        entity = CanonicalEntity(
+            entity_id=uuid4(),
+            entity_type="Service",
+            canonical_name="Rollback Service",
+            aliases=[],
+            attributes={"env": "test"},
+        )
+
+        async def _boom() -> None:
+            async with Neo4jUnitOfWork(driver) as uow:
+                repo = uow.graph
+                assert repo is not None
+                await repo.create_entity(entity)
+                raise RuntimeError("boom")
+
+        with pytest.raises(RuntimeError):
+            await _boom()
+
+        repo = Neo4jGraphRepository(driver)
+        assert await repo.get_entity(entity.entity_id) is None
     finally:
         await driver.close()
 

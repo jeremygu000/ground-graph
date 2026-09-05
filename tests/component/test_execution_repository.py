@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Any, cast
@@ -265,21 +266,37 @@ async def test_run_update_conflicts_across_sessions(postgres_component: Any) -> 
         async with session_factory() as winner_session, session_factory() as loser_session:
             winner_repo = ExecutionRepository(cast(PostgresSession, winner_session))
             loser_repo = ExecutionRepository(cast(PostgresSession, loser_session))
+            start = asyncio.Event()
 
-            winner = await winner_repo.update_run_status(
-                run.run_id,
-                ExecutionRunStatus.PENDING,
-                ExecutionRunStatus.RUNNING,
-            )
+            async def _attempt(
+                repo: ExecutionRepository, session: AsyncSession
+            ) -> tuple[str, ExecutionRun | ConcurrencyConflictError]:
+                await start.wait()
+                try:
+                    updated = await repo.update_run_status(
+                        run.run_id,
+                        ExecutionRunStatus.PENDING,
+                        ExecutionRunStatus.RUNNING,
+                    )
+                    await session.commit()
+                except ConcurrencyConflictError as exc:
+                    await session.rollback()
+                    return ("conflict", exc)
+                else:
+                    return ("ok", updated)
+
+            winner_task = asyncio.create_task(_attempt(winner_repo, winner_session))
+            loser_task = asyncio.create_task(_attempt(loser_repo, loser_session))
+            start.set()
+            results = await asyncio.gather(winner_task, loser_task)
+
+            ok = [result for result in results if result[0] == "ok"]
+            conflicts = [result for result in results if result[0] == "conflict"]
+            assert len(ok) == 1
+            assert len(conflicts) == 1
+            winner = ok[0][1]
+            assert isinstance(winner, ExecutionRun)
             assert winner.status == ExecutionRunStatus.RUNNING
-            await winner_session.commit()
-
-            with pytest.raises(ConcurrencyConflictError, match="status changed from pending"):
-                await loser_repo.update_run_status(
-                    run.run_id,
-                    ExecutionRunStatus.PENDING,
-                    ExecutionRunStatus.RUNNING,
-                )
 
         async with session_factory() as verify_session:
             verify_repo = ExecutionRepository(cast(PostgresSession, verify_session))
@@ -313,21 +330,37 @@ async def test_step_update_conflicts_across_sessions(postgres_component: Any) ->
         async with session_factory() as winner_session, session_factory() as loser_session:
             winner_repo = ExecutionRepository(cast(PostgresSession, winner_session))
             loser_repo = ExecutionRepository(cast(PostgresSession, loser_session))
+            start = asyncio.Event()
 
-            winner = await winner_repo.update_step_status(
-                step.step_id,
-                ExecutionStepStatus.PENDING,
-                ExecutionStepStatus.RUNNING,
-            )
+            async def _attempt(
+                repo: ExecutionRepository, session: AsyncSession
+            ) -> tuple[str, ExecutionStep | ConcurrencyConflictError]:
+                await start.wait()
+                try:
+                    updated = await repo.update_step_status(
+                        step.step_id,
+                        ExecutionStepStatus.PENDING,
+                        ExecutionStepStatus.RUNNING,
+                    )
+                    await session.commit()
+                except ConcurrencyConflictError as exc:
+                    await session.rollback()
+                    return ("conflict", exc)
+                else:
+                    return ("ok", updated)
+
+            winner_task = asyncio.create_task(_attempt(winner_repo, winner_session))
+            loser_task = asyncio.create_task(_attempt(loser_repo, loser_session))
+            start.set()
+            results = await asyncio.gather(winner_task, loser_task)
+
+            ok = [result for result in results if result[0] == "ok"]
+            conflicts = [result for result in results if result[0] == "conflict"]
+            assert len(ok) == 1
+            assert len(conflicts) == 1
+            winner = ok[0][1]
+            assert isinstance(winner, ExecutionStep)
             assert winner.status == ExecutionStepStatus.RUNNING
-            await winner_session.commit()
-
-            with pytest.raises(ConcurrencyConflictError, match="status changed from pending"):
-                await loser_repo.update_step_status(
-                    step.step_id,
-                    ExecutionStepStatus.PENDING,
-                    ExecutionStepStatus.RUNNING,
-                )
 
         async with session_factory() as verify_session:
             verify_repo = ExecutionRepository(cast(PostgresSession, verify_session))
