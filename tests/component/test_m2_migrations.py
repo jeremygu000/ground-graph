@@ -11,9 +11,10 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+from typing import Any
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import create_async_engine
 from tests.component.conftest import (
     POSTGRES_IMAGE,
@@ -98,6 +99,42 @@ async def _assert_vector_extension(dsn: str) -> bool:
     return vector_ext == "vector"
 
 
+async def _table_schema(dsn: str, table: str) -> tuple[dict[str, Any], list[Any]]:
+    engine = create_async_engine(dsn)
+    async with engine.connect() as conn:
+        columns = await conn.run_sync(
+            lambda sync_conn: {
+                column["name"]: column for column in inspect(sync_conn).get_columns(table)
+            }
+        )
+        foreign_keys = await conn.run_sync(
+            lambda sync_conn: inspect(sync_conn).get_foreign_keys(table)
+        )
+    await engine.dispose()
+    return columns, foreign_keys
+
+
+def _has_fk(
+    foreign_keys: list[Any],
+    *,
+    constrained_column: str,
+    referred_table: str,
+    ondelete: str = "CASCADE",
+) -> bool:
+    for fk in foreign_keys:
+        constrained_columns = fk.get("constrained_columns")
+        referred = fk.get("referred_table")
+        options = fk.get("options") or {}
+        if (
+            constrained_columns == [constrained_column]
+            and referred == referred_table
+            and isinstance(options, dict)
+            and options.get("ondelete") == ondelete
+        ):
+            return True
+    return False
+
+
 async def _count_tables(dsn: str) -> int:
     engine = create_async_engine(dsn)
     async with engine.connect() as conn:
@@ -144,10 +181,45 @@ async def test_alembic_upgrade_head_on_empty_db(project_root: Path) -> None:
 
     assert await _assert_vector_extension(dsn), "vector extension not created"
 
+    documents_columns, documents_fks = await _table_schema(dsn, "documents")
+    assert "tenant_id" not in documents_columns
+    assert _has_fk(documents_fks, constrained_column="source_id", referred_table="sources")
+
+    document_versions_columns, document_versions_fks = await _table_schema(dsn, "document_versions")
+    assert "doc_metadata" in document_versions_columns
+    assert _has_fk(
+        document_versions_fks,
+        constrained_column="document_id",
+        referred_table="documents",
+    )
+
+    chunks_columns, chunks_fks = await _table_schema(dsn, "chunks")
+    assert {"heading_path", "allowed_principals"}.issubset(chunks_columns)
+    assert _has_fk(chunks_fks, constrained_column="document_id", referred_table="documents")
+    assert _has_fk(
+        chunks_fks,
+        constrained_column="version_id",
+        referred_table="document_versions",
+    )
+
     assert await _assert_index_exists(dsn, "ix_execution_runs_tenant_id"), "tenant_id index missing"
     assert await _assert_index_exists(dsn, "ix_outbox_status_available_created"), (
         "outbox status index missing"
     )
+
+    execution_runs_columns, _ = await _table_schema(dsn, "execution_runs")
+    assert "tenant_id" in execution_runs_columns
+    assert not bool(execution_runs_columns["tenant_id"].get("nullable", True))
+
+    outbox_columns, _ = await _table_schema(dsn, "outbox")
+    assert {
+        "available_at",
+        "claimed_by",
+        "claim_token",
+        "claimed_at",
+        "lease_expires_at",
+        "completed_at",
+    }.issubset(outbox_columns)
 
     downgrade_result = _run_alembic(dsn, ["downgrade", "base"], cwd=project_root)
     assert downgrade_result.returncode == 0, (

@@ -48,6 +48,12 @@ class TestModelImports:
         assert "media_type" in columns
         assert "current_version_id" in columns
 
+        source_fk = next(
+            fk for fk in Document.__table__.foreign_keys if fk.parent.name == "source_id"
+        )
+        assert source_fk.column.table.name == "sources"
+        assert source_fk.ondelete == "CASCADE"
+
     def test_document_version_model_has_doc_metadata(self) -> None:
         columns = {c.name for c in DocumentVersion.__table__.columns}
         assert "version_id" in columns
@@ -70,6 +76,17 @@ class TestModelImports:
         assert "checksum" in columns
         assert "allowed_principals" in columns
 
+        document_fk = next(
+            fk for fk in Chunk.__table__.foreign_keys if fk.parent.name == "document_id"
+        )
+        version_fk = next(
+            fk for fk in Chunk.__table__.foreign_keys if fk.parent.name == "version_id"
+        )
+        assert document_fk.column.table.name == "documents"
+        assert document_fk.ondelete == "CASCADE"
+        assert version_fk.column.table.name == "document_versions"
+        assert version_fk.ondelete == "CASCADE"
+
     def test_execution_run_model_has_required_columns(self) -> None:
         columns = {c.name for c in ExecutionRun.__table__.columns}
         assert "run_id" in columns
@@ -81,6 +98,8 @@ class TestModelImports:
         assert "output" in columns
         assert "started_at" in columns
         assert "finished_at" in columns
+        tenant_indexes = ExecutionRun.__table__.indexes
+        assert any(index.name == "ix_execution_runs_tenant_id" for index in tenant_indexes)
 
     def test_outbox_model_has_required_columns(self) -> None:
         columns = {c.name for c in Outbox.__table__.columns}
@@ -92,7 +111,13 @@ class TestModelImports:
         assert "status" in columns
         assert "attempts" in columns
         assert "last_error" in columns
+        assert "available_at" in columns
         assert "created_at" in columns
+        assert "claimed_by" in columns
+        assert "claim_token" in columns
+        assert "claimed_at" in columns
+        assert "lease_expires_at" in columns
+        assert "completed_at" in columns
 
     def test_prompt_version_unique_constraint(self) -> None:
         assert any(
