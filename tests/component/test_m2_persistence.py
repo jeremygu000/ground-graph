@@ -257,7 +257,9 @@ async def test_document_current_version_fallback_and_delete(
         await session.commit()
 
         assert await session.get(SqlDocument, document.document_id) is None
-        assert await session.get(SqlDocumentVersion, document.version_id) is None
+        version_row = await session.get(SqlDocumentVersion, document.version_id)
+        assert version_row is not None
+        assert version_row.checksum == "abc123"
 
 
 async def test_chunk_lifecycle_and_listing(postgres_component: Any) -> None:

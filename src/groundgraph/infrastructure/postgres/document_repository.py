@@ -5,6 +5,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from sqlalchemy import delete, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from groundgraph.application.ports import DocumentRepository
 from groundgraph.domain.documents import Chunk, ParsedDocument, SourceDescriptor
@@ -52,12 +53,16 @@ class PostgresDocumentRepository(DocumentRepository):
         return [self._source_to_domain(row) for row in result.scalars().all()]
 
     async def create_document(self, document: ParsedDocument) -> ParsedDocument:
-        model = DocumentModel(
-            document_id=document.document_id,
-            source_id=document.source_id,
-            title=document.title,
-            media_type=document.media_type,
-            current_version_id=document.version_id,
+        doc_stmt = (
+            pg_insert(DocumentModel)
+            .values(
+                document_id=document.document_id,
+                source_id=document.source_id,
+                title=document.title,
+                media_type=document.media_type,
+                current_version_id=document.version_id,
+            )
+            .on_conflict_do_nothing(index_elements=["document_id"])
         )
         version = DocumentVersionModel(
             version_id=document.version_id,
@@ -68,7 +73,7 @@ class PostgresDocumentRepository(DocumentRepository):
             effective_at=document.effective_at,
             is_current=True,
         )
-        self._session.add(model)
+        self._session.add(doc_stmt)
         self._session.add(version)
         await self._session.flush()
         return document
@@ -95,7 +100,10 @@ class PostgresDocumentRepository(DocumentRepository):
         if document is None:
             return None
         version_result = await self._session.execute(
-            select(DocumentVersionModel).where(DocumentVersionModel.version_id == version_id)
+            select(DocumentVersionModel).where(
+                DocumentVersionModel.version_id == version_id,
+                DocumentVersionModel.document_id == document_id,
+            )
         )
         version = version_result.scalar_one_or_none()
         if version is None:

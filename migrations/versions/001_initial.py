@@ -116,11 +116,18 @@ def upgrade() -> None:
             server_default=sa.text("now()"),
             nullable=False,
         ),
-        sa.ForeignKeyConstraint(["document_id"], ["documents.document_id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["document_id"], ["documents.document_id"], ondelete="RESTRICT"),
         sa.PrimaryKeyConstraint("version_id"),
     )
     op.create_index("ix_document_versions_document_id", "document_versions", ["document_id"])
     op.create_index("ix_document_versions_checksum", "document_versions", ["checksum"])
+    op.create_index(
+        "ix_document_versions_current",
+        "document_versions",
+        ["document_id"],
+        unique=True,
+        postgresql_where=sa.text("is_current = true"),
+    )
 
     # chunks
     op.create_table(
@@ -152,7 +159,7 @@ def upgrade() -> None:
             server_default=sa.text("now()"),
             nullable=False,
         ),
-        sa.ForeignKeyConstraint(["document_id"], ["documents.document_id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["document_id"], ["documents.document_id"], ondelete="RESTRICT"),
         sa.ForeignKeyConstraint(
             ["version_id"], ["document_versions.version_id"], ondelete="CASCADE"
         ),
