@@ -458,14 +458,22 @@ class Outbox(Base):
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    available_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+    claimed_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    claim_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
     claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (
-        Index("ix_outbox_status_created", "status", "created_at"),
+        Index("ix_outbox_status_available_created", "status", "available_at", "created_at"),
         Index("ix_outbox_aggregate", "aggregate_type", "aggregate_id"),
     )
 

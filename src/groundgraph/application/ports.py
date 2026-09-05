@@ -10,7 +10,7 @@ Pydantic types — no framework imports allowed in the domain/application layers
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Protocol, TypeVar
+from typing import TYPE_CHECKING, Any, Protocol, Self, TypeVar
 
 from groundgraph.domain.documents import Chunk, ParsedDocument, SourceDescriptor
 from groundgraph.domain.evidence import OutboxEvent
@@ -50,6 +50,37 @@ class DocumentRepository(Protocol):
     async def get_chunk(self, chunk_id: UUID) -> Chunk | None: ...
 
     async def list_chunks(self, document_id: UUID, version_id: UUID) -> list[Chunk]: ...
+
+
+class OutboxRepository(Protocol):
+    """Port for transactional outbox persistence."""
+
+    async def add(self, event: OutboxEvent) -> OutboxEvent: ...
+
+    async def get(self, event_id: UUID) -> OutboxEvent | None: ...
+
+    async def claim_batch(
+        self, batch_size: int, worker_id: str, lease_duration_seconds: int
+    ) -> list[OutboxEvent]: ...
+
+    async def mark_completed(self, event_id: UUID, claim_token: str) -> None: ...
+
+    async def mark_failed(self, event_id: UUID, claim_token: str, error: str) -> None: ...
+
+
+class IngestionUnitOfWork(Protocol):
+    """Transactional boundary for document/version/chunk/outbox writes."""
+
+    documents: DocumentRepository
+    outbox: OutboxRepository
+
+    async def __aenter__(self) -> Self: ...
+
+    async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None: ...
+
+    async def commit(self) -> None: ...
+
+    async def rollback(self) -> None: ...
 
 
 class ObjectStore(Protocol):

@@ -28,11 +28,13 @@ from groundgraph.domain.execution import (
 )
 from groundgraph.domain.knowledge import CanonicalEntity, EntityMention, KnowledgeFact
 from groundgraph.domain.retrieval import (
+    AnswerClaim,
     Citation,
     Evidence,
     QueryResponse,
     RetrievalPlan,
 )
+from groundgraph.domain.types import validate_json_value
 
 
 class TestDocumentContracts:
@@ -94,6 +96,33 @@ class TestDocumentContracts:
         with pytest.raises(ValidationError, match="frozen"):
             source.uri = "/other"  # type: ignore
 
+    def test_source_descriptor_illegal_source_type(self) -> None:
+        with pytest.raises(ValidationError, match="source_type"):
+            SourceDescriptor(
+                source_id=uuid4(),
+                source_type="bad-type",  # type: ignore[arg-type]
+                uri="/path",
+                classification="internal",
+                tenant_id="default",
+            )
+
+    def test_validate_json_value_round_trip(self) -> None:
+        payload = {
+            "name": "api",
+            "count": 3,
+            "flags": [True, False, None],
+            "meta": {"region": "us-east-1"},
+        }
+        assert validate_json_value(payload) == payload
+
+    def test_validate_json_value_rejects_non_string_key(self) -> None:
+        with pytest.raises(TypeError, match="JSON object key"):
+            validate_json_value({1: "bad"})  # type: ignore[arg-type]
+
+    def test_validate_json_value_rejects_bytes(self) -> None:
+        with pytest.raises(ValueError, match="JsonValue"):
+            validate_json_value({"blob": b"raw"})
+
 
 class TestKnowledgeContracts:
     def test_entity_mention_round_trip(self) -> None:
@@ -151,6 +180,53 @@ class TestKnowledgeContracts:
                 confidence=0.9,
                 observed_at=datetime.now(UTC),
                 extraction_method="llm",
+                ontology_version="v0.1.0",
+            )
+
+    def test_knowledge_fact_reversed_validity_window(self) -> None:
+        with pytest.raises(ValueError, match="valid_to"):
+            KnowledgeFact(
+                fact_id=uuid4(),
+                subject_id=uuid4(),
+                predicate="DEPENDS_ON",
+                object_id=uuid4(),
+                status="candidate",
+                confidence=0.9,
+                valid_from=datetime(2024, 6, 1, tzinfo=UTC),
+                valid_to=datetime(2024, 1, 1, tzinfo=UTC),
+                observed_at=datetime(2024, 6, 1, tzinfo=UTC),
+                extraction_method="llm",
+                ontology_version="v0.1.0",
+            )
+
+    def test_knowledge_fact_naive_datetime_rejected(self) -> None:
+        naive_valid_from = datetime(2024, 1, 1, tzinfo=UTC).replace(tzinfo=None)
+        with pytest.raises(ValueError, match="timezone-aware"):
+            KnowledgeFact(
+                fact_id=uuid4(),
+                subject_id=uuid4(),
+                predicate="DEPENDS_ON",
+                object_id=uuid4(),
+                status="candidate",
+                confidence=0.9,
+                valid_from=naive_valid_from,
+                observed_at=datetime(2024, 6, 1, tzinfo=UTC),
+                extraction_method="llm",
+                ontology_version="v0.1.0",
+            )
+
+    def test_verified_fact_requires_evidence(self) -> None:
+        with pytest.raises(ValueError, match="verified facts"):
+            KnowledgeFact(
+                fact_id=uuid4(),
+                subject_id=uuid4(),
+                predicate="DEPENDS_ON",
+                object_id=uuid4(),
+                status="verified",
+                confidence=0.9,
+                evidence_ids=[],
+                observed_at=datetime(2024, 6, 1, tzinfo=UTC),
+                extraction_method="human",
                 ontology_version="v0.1.0",
             )
 
@@ -260,6 +336,81 @@ class TestRetrievalContracts:
         data = response.model_dump()
         restored = QueryResponse.model_validate(data)
         assert restored == response
+
+    def test_answered_response_requires_answer(self) -> None:
+        with pytest.raises(ValueError, match="answer"):
+            QueryResponse(
+                execution_run_id=uuid4(),
+                answer=None,
+                status="answered",
+                claims=[],
+                citations=[],
+                confidence_band="medium",
+                warnings=[],
+            )
+
+    def test_supported_claim_requires_evidence(self) -> None:
+        with pytest.raises(ValueError, match="evidence_id"):
+            AnswerClaim(
+                claim_id=uuid4(),
+                text="X depends on Y",
+                factual=True,
+                support_status="supported",
+                evidence_ids=[],
+            )
+
+    def test_unsupported_claim_rejects_evidence(self) -> None:
+        with pytest.raises(ValueError, match="unsupported"):
+            AnswerClaim(
+                claim_id=uuid4(),
+                text="X depends on Y",
+                factual=True,
+                support_status="unsupported",
+                evidence_ids=[uuid4()],
+            )
+
+    def test_evidence_temporal_validation(self) -> None:
+        with pytest.raises(ValueError, match="timezone-aware"):
+            Evidence(
+                evidence_id=uuid4(),
+                source_id=uuid4(),
+                content="Some text",
+                retrieval_method="graph",
+                valid_from=datetime(2024, 1, 1, tzinfo=UTC).replace(tzinfo=None),
+            )
+
+        with pytest.raises(ValueError, match="greater than valid_from"):
+            Evidence(
+                evidence_id=uuid4(),
+                source_id=uuid4(),
+                content="Some text",
+                retrieval_method="graph",
+                valid_from=datetime(2024, 1, 2, tzinfo=UTC),
+                valid_to=datetime(2024, 1, 1, tzinfo=UTC),
+            )
+
+    def test_query_response_rejects_answer_on_non_answered_status(self) -> None:
+        with pytest.raises(ValueError, match="None when status is not 'answered'"):
+            QueryResponse(
+                execution_run_id=uuid4(),
+                answer="should not be here",
+                status="failed",
+                claims=[],
+                citations=[],
+                confidence_band="low",
+                warnings=[],
+            )
+
+    def test_json_value_rejects_custom_object(self) -> None:
+        class CustomObject:
+            pass
+
+        with pytest.raises(ValueError, match="JsonValue"):
+            validate_json_value({"custom": CustomObject()})
+
+    def test_json_value_rejects_nan(self) -> None:
+        with pytest.raises(ValueError, match="NaN"):
+            validate_json_value({"value": float("nan")})
 
     def test_citation_round_trip(self) -> None:
         citation = Citation(

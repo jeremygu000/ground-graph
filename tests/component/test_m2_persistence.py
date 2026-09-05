@@ -7,14 +7,14 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
-from typing import Any
+from datetime import UTC, datetime, timedelta
+from typing import Any, cast
 from uuid import uuid4
 
 import pytest
 from neo4j import AsyncGraphDatabase
-from sqlalchemy import select, text
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy import delete, select, text, update
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from groundgraph.domain.execution import ExecutionRun, ExecutionRunStatus
 from groundgraph.domain.knowledge import CanonicalEntity, KnowledgeFact
@@ -28,12 +28,18 @@ from groundgraph.infrastructure.postgres.models import (
     Outbox,
     Source,
 )
+from groundgraph.infrastructure.postgres.outbox_repository import (
+    PostgresOutboxRepository,
+)
+from groundgraph.infrastructure.postgres.session import PostgresSession
 
 pytestmark = [pytest.mark.integration, pytest.mark.component]
 
 
 @asynccontextmanager
-async def _setup_postgres(dsn: str) -> AsyncGenerator[async_sessionmaker, None]:
+async def _setup_postgres(
+    dsn: str,
+) -> AsyncGenerator[async_sessionmaker[AsyncSession], None]:
     """Create tables and yield a session factory."""
     engine = create_async_engine(dsn)
     async with engine.begin() as conn:
@@ -183,7 +189,7 @@ async def test_fact_create_and_fetch(neo4j_component: Any) -> None:
             object_id=obj.entity_id,
             status="verified",
             confidence=0.95,
-            evidence_ids=[],
+            evidence_ids=[uuid4()],
             valid_from=valid_from,
             valid_to=valid_to,
             observed_at=datetime.now(UTC),
@@ -260,7 +266,7 @@ async def test_find_facts_datetime_conversion(neo4j_component: Any) -> None:
             object_id=obj.entity_id,
             status="verified",
             confidence=0.99,
-            evidence_ids=[],
+            evidence_ids=[uuid4()],
             valid_from=valid_from,
             valid_to=valid_to,
             observed_at=observed,
@@ -285,6 +291,9 @@ async def test_outbox_claim_pattern(postgres_component: Any) -> None:
         _setup_postgres(postgres_component.dsn) as session_factory,
         session_factory() as session,
     ):
+        await session.execute(delete(Outbox))
+        await session.commit()
+
         event = Outbox(
             event_id=uuid4(),
             aggregate_type="document",
@@ -298,7 +307,61 @@ async def test_outbox_claim_pattern(postgres_component: Any) -> None:
         session.add(event)
         await session.commit()
 
-        result = await session.get(Outbox, event.event_id)
-        assert result is not None
-        assert result.status == "pending"
-        assert result.attempts == 0
+        repo = PostgresOutboxRepository(cast(PostgresSession, session))
+        claimed = await repo.claim_batch(
+            batch_size=1,
+            worker_id="worker-a",
+            lease_duration_seconds=30,
+        )
+        assert len(claimed) == 1
+        claimed_event = claimed[0]
+        assert claimed_event.event_id == event.event_id
+        assert claimed_event.status.value == "claimed"
+        assert claimed_event.attempts == 1
+        assert claimed_event.claimed_at is not None
+
+        stored = await session.get(Outbox, event.event_id)
+        assert stored is not None
+        assert stored.claimed_by == "worker-a"
+        assert stored.claim_token is not None
+        token = stored.claim_token
+
+        await repo.mark_failed(event.event_id, token, "temporary failure")
+        failed = await session.get(Outbox, event.event_id)
+        assert failed is not None
+        assert failed.status == "pending"
+        assert failed.attempts == 1
+        assert failed.last_error == "temporary failure"
+        assert failed.claim_token is None
+        assert failed.claimed_by is None
+
+        second_claim = await repo.claim_batch(
+            batch_size=1,
+            worker_id="worker-b",
+            lease_duration_seconds=30,
+        )
+        assert second_claim == []
+
+        await session.execute(
+            update(Outbox)
+            .where(Outbox.event_id == event.event_id)
+            .values(available_at=datetime.now(UTC) - timedelta(seconds=1))
+        )
+        await session.commit()
+
+        third_claim = await repo.claim_batch(
+            batch_size=1,
+            worker_id="worker-b",
+            lease_duration_seconds=30,
+        )
+        assert len(third_claim) == 1
+        assert third_claim[0].event_id == event.event_id
+        stored = await session.get(Outbox, event.event_id)
+        assert stored is not None
+        assert stored.claimed_by == "worker-b"
+
+        await repo.mark_completed(event.event_id, stored.claim_token or "")
+        completed = await session.get(Outbox, event.event_id)
+        assert completed is not None
+        assert completed.status == "completed"
+        assert completed.completed_at is not None

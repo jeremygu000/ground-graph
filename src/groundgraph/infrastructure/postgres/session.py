@@ -8,17 +8,42 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from typing import Any, Protocol
 
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
 # Uses lazy initialization to avoid circular import with settings module.
 from groundgraph.application.settings import get_settings
 
-_engine = None
-_session_factory = None
+
+class PostgresSession(Protocol):
+    """Small structural protocol shared by adapters and unit tests."""
+
+    def add(self, instance: object) -> None: ...
+
+    async def execute(self, statement: Any, parameters: Any = None) -> Any: ...
+
+    async def get(self, entity: Any, ident: Any) -> Any | None: ...
+
+    async def flush(self) -> None: ...
+
+    async def commit(self) -> None: ...
+
+    async def rollback(self) -> None: ...
+
+    async def close(self) -> None: ...
 
 
-def _get_engine():
+_engine: AsyncEngine | None = None
+_session_factory: async_sessionmaker[AsyncSession] | None = None
+
+
+def _get_engine() -> AsyncEngine:
     global _engine  # noqa: PLW0603
     if _engine is None:
         settings = get_settings()

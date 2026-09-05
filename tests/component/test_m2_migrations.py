@@ -27,7 +27,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.component]
 def _run_alembic(dsn: str, command: list[str], cwd: Path) -> subprocess.CompletedProcess:
     env = {
         **subprocess.os.environ.copy(),
-        "DATABASE_URL": dsn.replace("postgresql+asyncpg://", "postgresql://"),
+        "DATABASE_URL": dsn,
     }
     return subprocess.run(
         ["uv", "run", "alembic", *command],
@@ -111,7 +111,7 @@ async def _count_tables(dsn: str) -> int:
 
 @pytest.fixture
 def project_root() -> Path:
-    return Path(__file__).parent.parent.parent.parent
+    return Path(__file__).parent.parent.parent
 
 
 @pytest.mark.skipif(
@@ -145,7 +145,7 @@ async def test_alembic_upgrade_head_on_empty_db(project_root: Path) -> None:
     assert await _assert_vector_extension(dsn), "vector extension not created"
 
     assert await _assert_index_exists(dsn, "ix_execution_runs_tenant_id"), "tenant_id index missing"
-    assert await _assert_index_exists(dsn, "ix_outbox_status_created"), (
+    assert await _assert_index_exists(dsn, "ix_outbox_status_available_created"), (
         "outbox status index missing"
     )
 
@@ -157,7 +157,7 @@ async def test_alembic_upgrade_head_on_empty_db(project_root: Path) -> None:
     )
 
     table_count = await _count_tables(dsn)
-    assert table_count == 0, f"Expected 0 tables after downgrade, found {table_count}"
+    assert table_count == 1, f"Expected only alembic_version after downgrade, found {table_count} tables"
 
 
 @pytest.mark.skipif(

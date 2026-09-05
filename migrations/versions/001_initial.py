@@ -161,6 +161,27 @@ def upgrade() -> None:
     op.create_index("ix_chunks_version_id", "chunks", ["version_id"])
     op.create_index("ix_chunks_checksum", "chunks", ["checksum"])
 
+    # index_versions
+    op.create_table(
+        "index_versions",
+        sa.Column("version_id", postgresql.UUID(), nullable=False),
+        sa.Column("index_name", sa.String(length=100), nullable=False),
+        sa.Column("version", sa.String(length=50), nullable=False),
+        sa.Column("embedding_model", sa.String(length=100), nullable=False),
+        sa.Column("embedding_dimensions", sa.Integer(), nullable=False),
+        sa.Column("chunker_version", sa.String(length=50), nullable=False),
+        sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.text("true")),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.PrimaryKeyConstraint("version_id"),
+        sa.UniqueConstraint("index_name", "version", name="uq_index_name_version"),
+    )
+    op.create_index("ix_index_versions_index_name", "index_versions", ["index_name"])
+
     # chunk_embeddings (pgvector)
     op.create_table(
         "chunk_embeddings",
@@ -379,16 +400,27 @@ def upgrade() -> None:
         sa.Column("attempts", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("last_error", sa.Text(), nullable=True),
         sa.Column(
+            "available_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("now()"),
+        ),
+        sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
             server_default=sa.text("now()"),
             nullable=False,
         ),
+        sa.Column("claimed_by", sa.String(length=255), nullable=True),
+        sa.Column("claim_token", sa.String(length=64), nullable=True),
         sa.Column("claimed_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("lease_expires_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
         sa.PrimaryKeyConstraint("event_id"),
     )
-    op.create_index("ix_outbox_status_created", "outbox", ["status", "created_at"])
+    op.create_index(
+        "ix_outbox_status_available_created", "outbox", ["status", "available_at", "created_at"]
+    )
     op.create_index("ix_outbox_aggregate", "outbox", ["aggregate_type", "aggregate_id"])
 
     # prompt_versions
@@ -430,29 +462,6 @@ def upgrade() -> None:
     op.create_index("ix_model_config_versions_config_key", "model_config_versions", ["config_key"])
     op.create_unique_constraint(
         "uq_model_config_key_version", "model_config_versions", ["config_key", "version"]
-    )
-
-    # index_versions
-    op.create_table(
-        "index_versions",
-        sa.Column("version_id", postgresql.UUID(), nullable=False),
-        sa.Column("index_name", sa.String(length=100), nullable=False),
-        sa.Column("version", sa.String(length=50), nullable=False),
-        sa.Column("embedding_model", sa.String(length=100), nullable=False),
-        sa.Column("embedding_dimensions", sa.Integer(), nullable=False),
-        sa.Column("chunker_version", sa.String(length=50), nullable=False),
-        sa.Column("is_active", sa.Boolean(), nullable=False, server_default="true"),
-        sa.Column(
-            "created_at",
-            sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
-            nullable=False,
-        ),
-        sa.PrimaryKeyConstraint("version_id"),
-    )
-    op.create_index("ix_index_versions_index_name", "index_versions", ["index_name"])
-    op.create_unique_constraint(
-        "uq_index_name_version", "index_versions", ["index_name", "version"]
     )
 
     # evaluation_datasets
@@ -595,7 +604,6 @@ def downgrade() -> None:
     op.drop_table("evaluation_runs")
     op.drop_table("evaluation_cases")
     op.drop_table("evaluation_datasets")
-    op.drop_table("index_versions")
     op.drop_table("model_config_versions")
     op.drop_table("prompt_versions")
     op.drop_table("outbox")
@@ -608,6 +616,7 @@ def downgrade() -> None:
     op.drop_table("ingestion_steps")
     op.drop_table("ingestion_runs")
     op.drop_table("chunk_embeddings")
+    op.drop_table("index_versions")
     op.drop_table("chunks")
     op.drop_table("document_versions")
     op.drop_table("documents")

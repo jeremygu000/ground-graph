@@ -10,7 +10,6 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from groundgraph.domain.execution import (
     ALLOWED_STEP_TRANSITIONS,
@@ -22,15 +21,19 @@ from groundgraph.domain.execution import (
 )
 from groundgraph.infrastructure.postgres.models import ExecutionRun as SQLExecutionRun
 from groundgraph.infrastructure.postgres.models import ExecutionStep as SQLExecutionStep
+from groundgraph.infrastructure.postgres.session import PostgresSession
 
 
 class ExecutionRepository:
     """PostgreSQL adapter for execution run/step persistence."""
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: PostgresSession) -> None:
         self._session = session
 
     async def create_run(self, run: ExecutionRun) -> ExecutionRun:
+        # The caller owns the transaction boundary (UoW); this repository
+        # only flushes changes so the session can be committed or rolled back
+        # as one unit with related document/outbox writes.
         sql_run = SQLExecutionRun(
             run_id=run.run_id,
             workflow=run.workflow,
@@ -45,7 +48,7 @@ class ExecutionRepository:
             error_message=run.error_message,
         )
         self._session.add(sql_run)
-        await self._session.commit()
+        await self._session.flush()
         return run
 
     async def get_run(self, run_id: UUID) -> ExecutionRun | None:
@@ -83,7 +86,7 @@ class ExecutionRepository:
         if error_message is not None:
             sql_run.error_message = error_message
 
-        await self._session.commit()
+        await self._session.flush()
         return self._sql_run_to_domain(sql_run)
 
     async def create_step(self, step: ExecutionStep) -> ExecutionStep:
@@ -102,7 +105,7 @@ class ExecutionRepository:
             error_message=step.error_message,
         )
         self._session.add(sql_step)
-        await self._session.commit()
+        await self._session.flush()
         return step
 
     async def get_step(self, step_id: UUID) -> ExecutionStep | None:
@@ -152,7 +155,7 @@ class ExecutionRepository:
         if error_message is not None:
             sql_step.error_message = error_message
 
-        await self._session.commit()
+        await self._session.flush()
         return self._sql_step_to_domain(sql_step)
 
     async def reconstruct_dag(self, run_id: UUID) -> tuple[ExecutionRun, list[ExecutionStep]]:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from logging.config import fileConfig
 
 from alembic import context
@@ -24,6 +25,11 @@ settings = get_settings()
 
 
 def get_url() -> str:
+    database_url = os.getenv("DATABASE_URL")
+    if database_url:
+        if database_url.startswith("postgresql://"):
+            return database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+        return database_url
     return settings.postgres_dsn_async
 
 
