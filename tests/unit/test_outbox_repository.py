@@ -196,6 +196,137 @@ async def test_claim_and_fail_paths() -> None:
 
 
 @pytest.mark.asyncio
+async def test_mark_completed_raises_when_event_missing() -> None:
+    session = _Session()
+    repo = PostgresOutboxRepository(cast(PostgresSession, session))
+
+    with pytest.raises(ValueError, match="event not found"):
+        await repo.mark_completed(uuid4(), "any-token")
+
+
+@pytest.mark.asyncio
+async def test_mark_failed_raises_when_event_missing() -> None:
+    session = _Session()
+    repo = PostgresOutboxRepository(cast(PostgresSession, session))
+
+    with pytest.raises(ValueError, match="event not found"):
+        await repo.mark_failed(uuid4(), "any-token", "boom")
+
+
+@pytest.mark.asyncio
+async def test_mark_failed_raises_when_status_not_claimed() -> None:
+    session = _Session()
+    event_id = uuid4()
+    session.rows[event_id] = _Row(
+        event_id=event_id,
+        status=OutboxEventStatus.PENDING.value,
+        claim_token="tok",
+    )
+    repo = PostgresOutboxRepository(cast(PostgresSession, session))
+
+    with pytest.raises(ValueError, match="event not in claimed state"):
+        await repo.mark_failed(event_id, "tok", "boom")
+
+
+@pytest.mark.asyncio
+async def test_mark_completed_raises_when_fencing_lost(monkeypatch: Any) -> None:
+    session = _Session()
+    event_id = uuid4()
+    row = _Row(event_id=event_id, status=OutboxEventStatus.CLAIMED.value, claim_token="orig")
+    session.rows[event_id] = row
+    repo = PostgresOutboxRepository(cast(PostgresSession, session))
+
+    monkeypatch.setattr(session, "_fencing_failed", lambda stmt, r: True)
+    with pytest.raises(ValueError, match="event claim lost"):
+        await repo.mark_completed(event_id, "orig")
+    assert row.status == OutboxEventStatus.CLAIMED.value
+
+
+@pytest.mark.asyncio
+async def test_mark_failed_raises_when_fencing_lost(monkeypatch: Any) -> None:
+    session = _Session()
+    event_id = uuid4()
+    row = _Row(event_id=event_id, status=OutboxEventStatus.CLAIMED.value, claim_token="orig")
+    session.rows[event_id] = row
+    repo = PostgresOutboxRepository(cast(PostgresSession, session))
+
+    monkeypatch.setattr(session, "_fencing_failed", lambda stmt, r: True)
+    with pytest.raises(ValueError, match="event claim lost"):
+        await repo.mark_failed(event_id, "orig", "boom")
+    assert row.last_error is None
+
+
+@pytest.mark.asyncio
+async def test_mark_completed_happy_path() -> None:
+    session = _Session()
+    event_id = uuid4()
+    row = _Row(
+        event_id=event_id,
+        status=OutboxEventStatus.CLAIMED.value,
+        claim_token="tok-abc",
+        claimed_by="worker",
+        claimed_at=datetime.now(UTC),
+    )
+    session.rows[event_id] = row
+    repo = PostgresOutboxRepository(cast(PostgresSession, session))
+
+    await repo.mark_completed(event_id, "tok-abc")
+    assert row.status == OutboxEventStatus.COMPLETED.value
+    assert row.completed_at is not None
+    assert row.lease_expires_at is None
+
+
+@pytest.mark.asyncio
+async def test_mark_failed_resets_to_pending_with_backoff() -> None:
+    session = _Session()
+    event_id = uuid4()
+    base_attempts = 3
+    row = _Row(
+        event_id=event_id,
+        status=OutboxEventStatus.CLAIMED.value,
+        claim_token="tok-xyz",
+        claimed_by="worker",
+        claimed_at=datetime.now(UTC),
+        attempts=base_attempts,
+    )
+    session.rows[event_id] = row
+    repo = PostgresOutboxRepository(cast(PostgresSession, session))
+
+    before = datetime.now(UTC)
+    await repo.mark_failed(event_id, "tok-xyz", "transient error")
+    assert row.status == OutboxEventStatus.PENDING.value
+    assert row.claimed_by is None
+    assert row.claim_token is None
+    assert row.claimed_at is None
+    assert row.lease_expires_at is None
+    assert row.last_error == "transient error"
+    assert row.available_at >= before
+
+
+@pytest.mark.asyncio
+async def test_mark_completed_raises_when_status_not_claimed() -> None:
+    session = _Session()
+    event_id = uuid4()
+    session.rows[event_id] = _Row(
+        event_id=event_id,
+        status=OutboxEventStatus.COMPLETED.value,
+        claim_token="tok",
+    )
+    repo = PostgresOutboxRepository(cast(PostgresSession, session))
+
+    with pytest.raises(ValueError, match="event not in claimed state"):
+        await repo.mark_completed(event_id, "tok")
+
+
+@pytest.mark.asyncio
+async def test_get_returns_none_for_missing_event() -> None:
+    session = _Session()
+    repo = PostgresOutboxRepository(cast(PostgresSession, session))
+
+    assert await repo.get(uuid4()) is None
+
+
+@pytest.mark.asyncio
 async def test_outbox_repository_rejects_mutated_payload() -> None:
     session = _Session()
     repo = PostgresOutboxRepository(cast(PostgresSession, session))
