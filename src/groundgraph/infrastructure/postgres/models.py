@@ -33,8 +33,8 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 try:
     from pgvector.sqlalchemy import VECTOR
-except ImportError:
-    VECTOR = None  # type: ignore[assignment, misc]
+except ImportError:  # pragma: no cover
+    raise ImportError("pgvector is required: pip install pgvector") from None
 
 
 class Base(AsyncAttrs, DeclarativeBase):
@@ -201,7 +201,7 @@ class ChunkEmbedding(Base):
     index_version_id: Mapped[UUID] = mapped_column(
         PG_UUID, ForeignKey("index_versions.version_id", ondelete="CASCADE"), primary_key=True
     )
-    embedding: Mapped[list[float]] = mapped_column(VECTOR, nullable=False)
+    embedding: Mapped[list[float]] = mapped_column(VECTOR(1536), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

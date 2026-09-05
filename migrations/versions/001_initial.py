@@ -182,6 +182,13 @@ def upgrade() -> None:
         sa.UniqueConstraint("index_name", "version", name="uq_index_name_version"),
     )
     op.create_index("ix_index_versions_index_name", "index_versions", ["index_name"])
+    op.create_index(
+        "ix_index_versions_active",
+        "index_versions",
+        ["index_name"],
+        unique=True,
+        postgresql_where=sa.text("is_active = true"),
+    )
 
     # chunk_embeddings (pgvector)
     op.create_table(
