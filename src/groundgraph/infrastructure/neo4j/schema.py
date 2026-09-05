@@ -59,7 +59,9 @@ async def ensure_schema(driver: AsyncDriver) -> None:
     async with cast(Any, driver.session(database=settings.neo4j_database)) as session:
         for constraint_cypher in CONSTRAINTS:
             try:
-                await session.run(constraint_cypher)  # type: ignore[arg-type]
+                async with await session.begin_transaction() as tx:
+                    await tx.run(constraint_cypher)  # type: ignore[arg-type]
+                    await tx.commit()
                 logger.debug("neo4j.schema.constraint_created", cypher=constraint_cypher)
             except Exception as exc:
                 if "already exists" not in str(exc).lower():
@@ -69,7 +71,9 @@ async def ensure_schema(driver: AsyncDriver) -> None:
 
         for index_cypher in INDEXES:
             try:
-                await session.run(index_cypher)  # type: ignore[arg-type]
+                async with await session.begin_transaction() as tx:
+                    await tx.run(index_cypher)  # type: ignore[arg-type]
+                    await tx.commit()
                 logger.debug("neo4j.schema.index_created", cypher=index_cypher)
             except Exception as exc:
                 if "already exists" not in str(exc).lower():

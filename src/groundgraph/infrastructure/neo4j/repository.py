@@ -26,7 +26,7 @@ _ENTITY_FIND: LiteralString = """
 MATCH (e:Entity)
 WHERE ($canonical_name IS NULL OR e.canonical_name = $canonical_name)
   AND ($entity_type IS NULL OR e.entity_type = $entity_type)
-RETURN e.entity_id, e.entity_type, e.canonical_name, e.aliases, e.attributes
+RETURN e
 LIMIT 100
 """
 
@@ -90,6 +90,29 @@ def _dict_to_entity(record: Any) -> CanonicalEntity:
         attributes=json.loads(cast(str, node_dict.get("attributes")))
         if node_dict.get("attributes")
         else {},
+    )
+
+
+def _neo4j_datetime_to_native(value: Any) -> Any:
+    if hasattr(value, "to_native"):
+        return value.to_native()
+    return value
+
+
+def _dict_to_fact(node: dict[str, Any]) -> KnowledgeFact:
+    return KnowledgeFact(
+        fact_id=node["fact_id"],
+        subject_id=node["subject_id"],
+        predicate=node["predicate"],
+        object_id=node["object_id"],
+        status=node["status"],
+        confidence=node["confidence"],
+        evidence_ids=node.get("evidence_ids", []),
+        valid_from=_neo4j_datetime_to_native(node.get("valid_from")),
+        valid_to=_neo4j_datetime_to_native(node.get("valid_to")),
+        observed_at=_neo4j_datetime_to_native(node["observed_at"]),
+        extraction_method=node["extraction_method"],
+        ontology_version=node["ontology_version"],
     )
 
 
@@ -164,24 +187,7 @@ class Neo4jGraphRepository:
             record = await result.single()
             if not record:
                 return None
-            f = record["f"]
-            observed = f["observed_at"]
-            if hasattr(observed, "to_native"):
-                observed = observed.to_native()
-            return KnowledgeFact(
-                fact_id=f["fact_id"],
-                subject_id=f["subject_id"],
-                predicate=f["predicate"],
-                object_id=f["object_id"],
-                status=f["status"],
-                confidence=f["confidence"],
-                evidence_ids=f.get("evidence_ids", []),
-                valid_from=f.get("valid_from"),
-                valid_to=f.get("valid_to"),
-                observed_at=observed,
-                extraction_method=f["extraction_method"],
-                ontology_version=f["ontology_version"],
-            )
+            return _dict_to_fact(record["f"])
 
     async def find_facts(
         self,
@@ -215,23 +221,7 @@ class Neo4jGraphRepository:
         async with cast(Any, self._driver.session()) as session:
             result = await session.run(cypher, **params)  # pyright: ignore[reportArgumentType]
             records = await result.data()
-            return [
-                KnowledgeFact(
-                    fact_id=r["f"]["fact_id"],
-                    subject_id=r["f"]["subject_id"],
-                    predicate=r["f"]["predicate"],
-                    object_id=r["f"]["object_id"],
-                    status=r["f"]["status"],
-                    confidence=r["f"]["confidence"],
-                    evidence_ids=r["f"].get("evidence_ids", []),
-                    valid_from=r["f"].get("valid_from"),
-                    valid_to=r["f"].get("valid_to"),
-                    observed_at=r["f"]["observed_at"],
-                    extraction_method=r["f"]["extraction_method"],
-                    ontology_version=r["f"]["ontology_version"],
-                )
-                for r in records
-            ]
+            return [_dict_to_fact(r["f"]) for r in records]
 
     async def update_fact_status(
         self,
@@ -244,8 +234,12 @@ class Neo4jGraphRepository:
             "status": status,
             "superseded_by": str(superseded_by) if superseded_by else None,
         }
-        async with cast(Any, self._driver.session()) as session:
-            await session.run(_FACT_UPDATE_STATUS, **params)
+        async with (
+            cast(Any, self._driver.session()) as session,
+            await session.begin_transaction() as tx,
+        ):
+            await tx.run(_FACT_UPDATE_STATUS, **params)
+            await tx.commit()
         fact = await self.get_fact(fact_id)
         if not fact:
             raise ValueError(f"Fact {fact_id} not found after status update")
@@ -260,8 +254,12 @@ class Neo4jGraphRepository:
             "locator": mention.locator,
             "extraction_confidence": mention.extraction_confidence,
         }
-        async with cast(Any, self._driver.session()) as session:
-            await session.run(_MENTION_MERGE, **params)
+        async with (
+            cast(Any, self._driver.session()) as session,
+            await session.begin_transaction() as tx,
+        ):
+            await tx.run(_MENTION_MERGE, **params)
+            await tx.commit()
         return mention
 
     async def find_mentions(self, chunk_id: UUID) -> list[EntityMention]:

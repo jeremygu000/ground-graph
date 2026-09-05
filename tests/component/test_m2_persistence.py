@@ -131,7 +131,10 @@ async def test_entity_create_and_fetch(neo4j_component: Any) -> None:
             entity_type="Service",
             canonical_name="API Gateway",
             aliases=["api-gateway", "gateway"],
-            attributes={},
+            attributes={
+                "region": "us-east-1",
+                "owner": {"team": "platform", "contacts": ["alice", "bob"]},
+            },
         )
         await repo.create_entity(entity)
 
@@ -139,6 +142,10 @@ async def test_entity_create_and_fetch(neo4j_component: Any) -> None:
         assert result is not None
         assert result.canonical_name == "API Gateway"
         assert "api-gateway" in result.aliases
+        assert result.attributes == {
+            "region": "us-east-1",
+            "owner": {"team": "platform", "contacts": ["alice", "bob"]},
+        }
     finally:
         await driver.close()
 
@@ -167,6 +174,8 @@ async def test_fact_create_and_fetch(neo4j_component: Any) -> None:
         await repo.create_entity(subject)
         await repo.create_entity(obj)
 
+        valid_from = datetime(2024, 1, 1, tzinfo=UTC)
+        valid_to = datetime(2024, 12, 31, tzinfo=UTC)
         fact = KnowledgeFact(
             fact_id=uuid4(),
             subject_id=subject.entity_id,
@@ -175,6 +184,8 @@ async def test_fact_create_and_fetch(neo4j_component: Any) -> None:
             status="verified",
             confidence=0.95,
             evidence_ids=[],
+            valid_from=valid_from,
+            valid_to=valid_to,
             observed_at=datetime.now(UTC),
             extraction_method="structured",
             ontology_version="v0.1.0",
@@ -185,6 +196,86 @@ async def test_fact_create_and_fetch(neo4j_component: Any) -> None:
         assert result is not None
         assert result.predicate == "DEPENDS_ON"
         assert result.status == "verified"
+        assert result.valid_from == valid_from
+        assert result.valid_to == valid_to
+    finally:
+        await driver.close()
+
+
+async def test_find_entities_returns_entity(neo4j_component: Any) -> None:
+    driver = AsyncGraphDatabase.driver(
+        neo4j_component.uri, auth=(neo4j_component.user, neo4j_component.password)
+    )
+    try:
+        repo = Neo4jGraphRepository(driver)
+
+        entity = CanonicalEntity(
+            entity_id=uuid4(),
+            entity_type="Service",
+            canonical_name="FindMe Service",
+            aliases=["findme"],
+            attributes={"env": "prod"},
+        )
+        await repo.create_entity(entity)
+
+        results = await repo.find_entities(canonical_name="FindMe Service")
+        assert len(results) == 1
+        assert results[0].canonical_name == "FindMe Service"
+        assert results[0].entity_type == "Service"
+    finally:
+        await driver.close()
+
+
+async def test_find_facts_datetime_conversion(neo4j_component: Any) -> None:
+    driver = AsyncGraphDatabase.driver(
+        neo4j_component.uri, auth=(neo4j_component.user, neo4j_component.password)
+    )
+    try:
+        repo = Neo4jGraphRepository(driver)
+
+        subject = CanonicalEntity(
+            entity_id=uuid4(),
+            entity_type="Service",
+            canonical_name="Source Svc",
+            aliases=[],
+            attributes={},
+        )
+        obj = CanonicalEntity(
+            entity_id=uuid4(),
+            entity_type="Service",
+            canonical_name="Target Svc",
+            aliases=[],
+            attributes={},
+        )
+        await repo.create_entity(subject)
+        await repo.create_entity(obj)
+
+        valid_from = datetime(2024, 1, 1, tzinfo=UTC)
+        valid_to = datetime(2024, 12, 31, tzinfo=UTC)
+        observed = datetime(2024, 6, 15, tzinfo=UTC)
+        fact = KnowledgeFact(
+            fact_id=uuid4(),
+            subject_id=subject.entity_id,
+            predicate="CALLS",
+            object_id=obj.entity_id,
+            status="verified",
+            confidence=0.99,
+            evidence_ids=[],
+            valid_from=valid_from,
+            valid_to=valid_to,
+            observed_at=observed,
+            extraction_method="llm",
+            ontology_version="v0.1.0",
+        )
+        await repo.create_fact(fact)
+
+        results = await repo.find_facts(subject_id=subject.entity_id)
+        assert len(results) == 1
+        result = results[0]
+        assert result.predicate == "CALLS"
+        assert result.valid_from == valid_from
+        assert result.valid_to == valid_to
+        assert result.observed_at == observed
     finally:
         await driver.close()
 
