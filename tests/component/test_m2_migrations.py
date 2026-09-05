@@ -157,7 +157,9 @@ async def test_alembic_upgrade_head_on_empty_db(project_root: Path) -> None:
     )
 
     table_count = await _count_tables(dsn)
-    assert table_count == 1, f"Expected only alembic_version after downgrade, found {table_count} tables"
+    assert table_count == 1, (
+        f"Expected only alembic_version after downgrade, found {table_count} tables"
+    )
 
 
 @pytest.mark.skipif(

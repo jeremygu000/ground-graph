@@ -56,14 +56,19 @@ class _Result:
         self._row = row
         self._rows = rows or []
 
-    def scalar_one_or_none(self) -> object | None:
-        return self._row
-
     def scalars(self) -> _Result:
         return self
 
     def all(self) -> list[object]:
         return self._rows
+
+    def scalar_one_or_none(self) -> object | None:
+        return self._row
+
+    def scalar_one(self) -> object:
+        if self._row is None:
+            raise LookupError("no row")
+        return self._row
 
 
 class _Session:
@@ -73,6 +78,7 @@ class _Session:
         self.executed: list[object] = []
         self.get_map: dict[tuple[object, object], object | None] = {}
         self.execute_result: _Result = _Result()
+        self.last_statement: object | None = None
 
     def add(self, instance: object) -> None:
         self.added.append(instance)
@@ -81,6 +87,7 @@ class _Session:
         self.flushed += 1
 
     async def execute(self, statement: object, parameters: object | None = None) -> _Result:
+        self.last_statement = statement
         self.executed.append(statement)
         return self.execute_result
 
@@ -162,3 +169,50 @@ async def test_invalid_updates_and_terminal_fields() -> None:
         await repo.update_run_status(run.run_id, ExecutionRunStatus.SUCCEEDED)
     with pytest.raises(ValueError, match=r"illegal execution_step transition"):
         await repo.update_step_status(step.step_id, ExecutionStepStatus.SUCCEEDED)
+
+
+@pytest.mark.asyncio
+async def test_update_run_status_uses_atomic_where_clause() -> None:
+    session = _Session()
+    repo = ExecutionRepository(cast(PostgresSession, session))
+    run_id = uuid4()
+    session.execute_result = _Result(
+        row=_RunRow(
+            run_id=run_id,
+            workflow="query",
+            status=ExecutionRunStatus.RUNNING.value,
+            principal="engineering",
+            tenant_id="default",
+            input={},
+            output={},
+        )
+    )
+
+    await repo.update_run_status(run_id, ExecutionRunStatus.RUNNING)
+
+    assert session.last_statement is not None
+    assert "status IN" in str(session.last_statement)
+
+
+@pytest.mark.asyncio
+async def test_update_step_status_uses_atomic_where_clause() -> None:
+    session = _Session()
+    repo = ExecutionRepository(cast(PostgresSession, session))
+    step_id = uuid4()
+    session.execute_result = _Result(
+        row=_StepRow(
+            step_id=step_id,
+            run_id=step_id,
+            name="plan",
+            status=ExecutionStepStatus.RUNNING.value,
+            attempt=1,
+            depends_on=[],
+            input={},
+            output={},
+        )
+    )
+
+    await repo.update_step_status(step_id, ExecutionStepStatus.RUNNING)
+
+    assert session.last_statement is not None
+    assert "status IN" in str(session.last_statement)

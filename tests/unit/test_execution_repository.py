@@ -16,8 +16,6 @@ from groundgraph.domain.execution import (
     ExecutionStepStatus,
 )
 from groundgraph.infrastructure.postgres.execution_store import ExecutionRepository
-from groundgraph.infrastructure.postgres.models import ExecutionRun as SQLExecutionRun
-from groundgraph.infrastructure.postgres.models import ExecutionStep as SQLExecutionStep
 
 
 @dataclass
@@ -258,36 +256,66 @@ async def test_execution_repository_terminal_run_and_step_updates() -> None:
     session = _Session()
     run_id = uuid4()
     step_id = uuid4()
-    session.get_map = {
-        (SQLExecutionRun, run_id): _RunRow(
+    repo = ExecutionRepository(session)
+
+    session.execute_factory = _ExecuteFactory(
+        row=_RunRow(
             run_id=run_id,
             workflow="query",
-            status=ExecutionRunStatus.PENDING.value,
+            status=ExecutionRunStatus.RUNNING.value,
             principal="engineering",
             tenant_id="default",
             input={},
             output={},
-        ),
-        (SQLExecutionStep, step_id): _StepRow(
+        )
+    )
+    await repo.update_run_status(run_id, ExecutionRunStatus.RUNNING)
+
+    session.execute_factory = _ExecuteFactory(
+        row=_RunRow(
+            run_id=run_id,
+            workflow="query",
+            status=ExecutionRunStatus.SUCCEEDED.value,
+            principal="engineering",
+            tenant_id="default",
+            input={},
+            output={},
+            finished_at=datetime.now(UTC),
+        )
+    )
+    updated_run = await repo.update_run_status(run_id, ExecutionRunStatus.SUCCEEDED)
+    assert updated_run.status == ExecutionRunStatus.SUCCEEDED
+    assert updated_run.finished_at is not None
+
+    session.execute_factory = _ExecuteFactory(
+        row=_StepRow(
             step_id=step_id,
             run_id=run_id,
             name="plan",
-            status=ExecutionStepStatus.PENDING.value,
+            status=ExecutionStepStatus.RUNNING.value,
             attempt=1,
             depends_on=[],
             input={},
             output={},
             created_at=datetime.now(UTC),
-        ),
-    }
-    repo = ExecutionRepository(session)
-
-    await repo.update_run_status(run_id, ExecutionRunStatus.RUNNING)
-    updated_run = await repo.update_run_status(run_id, ExecutionRunStatus.SUCCEEDED)
-    assert updated_run.status == ExecutionRunStatus.SUCCEEDED
-    assert updated_run.finished_at is not None
-
+        )
+    )
     await repo.update_step_status(step_id, ExecutionStepStatus.RUNNING)
+
+    session.execute_factory = _ExecuteFactory(
+        row=_StepRow(
+            step_id=step_id,
+            run_id=run_id,
+            name="plan",
+            status=ExecutionStepStatus.SUCCEEDED.value,
+            attempt=1,
+            depends_on=[],
+            input={},
+            output={},
+            finished_at=datetime.now(UTC),
+            created_at=datetime.now(UTC),
+        )
+    )
     updated_step = await repo.update_step_status(step_id, ExecutionStepStatus.SUCCEEDED)
     assert updated_step.status == ExecutionStepStatus.SUCCEEDED
     assert updated_step.finished_at is not None

@@ -13,10 +13,10 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from groundgraph.domain.defaults import empty_json_dict, empty_str_list, empty_uuid_list
-from groundgraph.domain.types import JsonValue
+from groundgraph.domain.types import JsonValue, validate_json_value
 
 
 class EntityMention(BaseModel):
@@ -51,6 +51,11 @@ class CanonicalEntity(BaseModel):
     canonical_name: str
     aliases: list[str] = Field(default_factory=empty_str_list)
     attributes: dict[str, JsonValue] = Field(default_factory=empty_json_dict)
+
+    @field_validator("attributes", mode="before")
+    @classmethod
+    def _validate_attributes(cls, value: object) -> object:
+        return validate_json_value(value)
 
 
 class KnowledgeFact(BaseModel):

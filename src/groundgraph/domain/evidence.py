@@ -13,10 +13,10 @@ from datetime import datetime
 from enum import StrEnum
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from groundgraph.domain.defaults import empty_json_dict
-from groundgraph.domain.types import JsonValue
+from groundgraph.domain.types import JsonValue, validate_json_value
 
 
 class OutboxEventType(StrEnum):
@@ -63,3 +63,8 @@ class OutboxEvent(BaseModel):
     created_at: datetime
     claimed_at: datetime | None = None
     completed_at: datetime | None = None
+
+    @field_validator("payload", mode="before")
+    @classmethod
+    def _validate_payload(cls, value: object) -> object:
+        return validate_json_value(value)

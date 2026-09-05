@@ -9,10 +9,10 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from groundgraph.domain.defaults import empty_json_dict, empty_str_list
-from groundgraph.domain.types import JsonValue
+from groundgraph.domain.types import JsonValue, validate_json_value
 
 
 class SourceDescriptor(BaseModel):
@@ -59,6 +59,11 @@ class ParsedDocument(BaseModel):
     content: str
     metadata: dict[str, JsonValue] = Field(default_factory=empty_json_dict)
     effective_at: datetime | None = None
+
+    @field_validator("metadata", mode="before")
+    @classmethod
+    def _validate_metadata(cls, value: object) -> object:
+        return validate_json_value(value)
 
 
 class Chunk(BaseModel):

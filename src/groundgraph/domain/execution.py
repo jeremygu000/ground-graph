@@ -14,10 +14,10 @@ from datetime import datetime
 from enum import StrEnum
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from groundgraph.domain.defaults import empty_json_dict, empty_uuid_list
-from groundgraph.domain.types import JsonValue
+from groundgraph.domain.types import JsonValue, validate_json_value
 
 
 class ExecutionRunStatus(StrEnum):
@@ -111,6 +111,11 @@ class ExecutionRun(BaseModel):
             )
         return self
 
+    @field_validator("input", "output", mode="before")
+    @classmethod
+    def _validate_json_fields(cls, value: object) -> object:
+        return validate_json_value(value)
+
 
 class ExecutionStep(BaseModel):
     """One node in the workflow graph.
@@ -135,6 +140,11 @@ class ExecutionStep(BaseModel):
     finished_at: datetime | None = None
     error_code: str | None = None
     error_message: str | None = None
+
+    @field_validator("input", "output", mode="before")
+    @classmethod
+    def _validate_json_fields(cls, value: object) -> object:
+        return validate_json_value(value)
 
 
 def assert_run_transition(current: ExecutionRunStatus, target: ExecutionRunStatus) -> None:

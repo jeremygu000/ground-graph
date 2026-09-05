@@ -123,6 +123,20 @@ class TestDocumentContracts:
         with pytest.raises(ValueError, match="JsonValue"):
             validate_json_value({"blob": b"raw"})
 
+    def test_parsed_document_rejects_invalid_metadata(self) -> None:
+        with pytest.raises(ValueError, match="JsonValue"):
+            ParsedDocument(
+                document_id=uuid4(),
+                version_id=uuid4(),
+                source_id=uuid4(),
+                title="Test Document",
+                media_type="text/markdown",
+                checksum="abc123",
+                content="# Hello",
+                metadata={"blob": b"raw"},
+                effective_at=datetime(2024, 1, 1, tzinfo=UTC),
+            )
+
 
 class TestKnowledgeContracts:
     def test_entity_mention_round_trip(self) -> None:
@@ -149,6 +163,15 @@ class TestKnowledgeContracts:
         data = entity.model_dump()
         restored = CanonicalEntity.model_validate(data)
         assert restored == entity
+
+    def test_canonical_entity_rejects_invalid_attributes(self) -> None:
+        with pytest.raises(ValueError, match="JsonValue"):
+            CanonicalEntity(
+                entity_id=uuid4(),
+                entity_type="Service",
+                canonical_name="API Gateway",
+                attributes={"blob": b"raw"},
+            )
 
     def test_knowledge_fact_round_trip(self) -> None:
         fact = KnowledgeFact(
@@ -247,6 +270,17 @@ class TestExecutionContracts:
         data = run.model_dump()
         restored = ExecutionRun.model_validate(data)
         assert restored == run
+
+    def test_execution_run_rejects_invalid_json_input(self) -> None:
+        with pytest.raises(ValueError, match="JsonValue"):
+            ExecutionRun(
+                run_id=uuid4(),
+                workflow="query",
+                status=ExecutionRunStatus.PENDING,
+                principal="engineering",
+                tenant_id="default",
+                input={"blob": b"raw"},
+            )
 
     def test_execution_run_terminal_requires_finished_at(self) -> None:
         with pytest.raises(ValueError, match="terminal"):

@@ -9,9 +9,10 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from groundgraph.domain.execution import (
+    ALLOWED_RUN_TRANSITIONS,
     ALLOWED_STEP_TRANSITIONS,
     ExecutionRun,
     ExecutionRunStatus,
@@ -67,25 +68,39 @@ class ExecutionRepository:
         error_code: str | None = None,
         error_message: str | None = None,
     ) -> ExecutionRun:
-        sql_run = await self._session.get(SQLExecutionRun, run_id)
-        if not sql_run:
-            raise ValueError(f"ExecutionRun {run_id} not found")
+        current_statuses = {
+            current for current, targets in ALLOWED_RUN_TRANSITIONS.items() if new_status in targets
+        }
+        if not current_statuses:
+            raise ValueError(f"illegal execution_run transition: * -> {new_status.value}")
 
-        current = ExecutionRunStatus(sql_run.status)
-        assert_run_transition(current, new_status)
-
-        sql_run.status = new_status.value
+        update_values: dict[str, object] = {"status": new_status.value}
         if new_status in (
             ExecutionRunStatus.SUCCEEDED,
             ExecutionRunStatus.FAILED,
             ExecutionRunStatus.CANCELLED,
         ):
-            sql_run.finished_at = datetime.now(UTC)
+            update_values["finished_at"] = datetime.now(UTC)
         if error_code is not None:
-            sql_run.error_code = error_code
+            update_values["error_code"] = error_code
         if error_message is not None:
-            sql_run.error_message = error_message
+            update_values["error_message"] = error_message
 
+        result = await self._session.execute(
+            update(SQLExecutionRun)
+            .where(SQLExecutionRun.run_id == run_id)
+            .where(SQLExecutionRun.status.in_({s.value for s in current_statuses}))
+            .values(**update_values)
+            .returning(SQLExecutionRun)
+        )
+        sql_run = result.scalar_one_or_none()
+        if sql_run is None:
+            existing = await self._session.get(SQLExecutionRun, run_id)
+            if existing is None:
+                raise ValueError(f"ExecutionRun {run_id} not found")
+            current = ExecutionRunStatus(existing.status)
+            assert_run_transition(current, new_status)
+            raise ValueError(f"ExecutionRun {run_id} update lost race")
         await self._session.flush()
         return self._sql_run_to_domain(sql_run)
 
@@ -133,28 +148,44 @@ class ExecutionRepository:
         error_code: str | None = None,
         error_message: str | None = None,
     ) -> ExecutionStep:
-        sql_step = await self._session.get(SQLExecutionStep, step_id)
-        if not sql_step:
-            raise ValueError(f"ExecutionStep {step_id} not found")
+        current_statuses = {
+            current
+            for current, targets in ALLOWED_STEP_TRANSITIONS.items()
+            if new_status in targets
+        }
+        if not current_statuses:
+            raise ValueError(f"illegal execution_step transition: * -> {new_status.value}")
 
-        current = ExecutionStepStatus(sql_step.status)
-        if new_status not in ALLOWED_STEP_TRANSITIONS.get(current, set()):
-            raise ValueError(
-                f"illegal execution_step transition: {current.value} -> {new_status.value}"
-            )
-
-        sql_step.status = new_status.value
+        update_values: dict[str, object] = {"status": new_status.value}
         if new_status in (
             ExecutionStepStatus.SUCCEEDED,
             ExecutionStepStatus.FAILED,
             ExecutionStepStatus.SKIPPED,
         ):
-            sql_step.finished_at = datetime.now(UTC)
+            update_values["finished_at"] = datetime.now(UTC)
         if error_code is not None:
-            sql_step.error_code = error_code
+            update_values["error_code"] = error_code
         if error_message is not None:
-            sql_step.error_message = error_message
+            update_values["error_message"] = error_message
 
+        result = await self._session.execute(
+            update(SQLExecutionStep)
+            .where(SQLExecutionStep.step_id == step_id)
+            .where(SQLExecutionStep.status.in_({s.value for s in current_statuses}))
+            .values(**update_values)
+            .returning(SQLExecutionStep)
+        )
+        sql_step = result.scalar_one_or_none()
+        if sql_step is None:
+            existing = await self._session.get(SQLExecutionStep, step_id)
+            if existing is None:
+                raise ValueError(f"ExecutionStep {step_id} not found")
+            current = ExecutionStepStatus(existing.status)
+            if new_status not in ALLOWED_STEP_TRANSITIONS.get(current, set()):
+                raise ValueError(
+                    f"illegal execution_step transition: {current.value} -> {new_status.value}"
+                )
+            raise ValueError(f"ExecutionStep {step_id} update lost race")
         await self._session.flush()
         return self._sql_step_to_domain(sql_step)
 
