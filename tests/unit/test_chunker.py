@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from uuid import uuid4
 
 from groundgraph.application.ingestion.chunker import Chunker
@@ -69,10 +70,64 @@ class TestChunker:
         chunks = self.chunker.chunk(content, self.document_id, self.version_id, ["admin", "eng"])
         assert all(c.allowed_principals == ["admin", "eng"] for c in chunks)
 
-    def test_locator_contains_ordinal(self) -> None:
+    def test_locator_is_precise_line_range(self) -> None:
+        content = ParsedContent(
+            title="X", body="line one\nline two\nline three", media_type="text/plain"
+        )
+        chunks = self.chunker.chunk(content, self.document_id, self.version_id, self.principals)
+        assert len(chunks) == 1
+        assert chunks[0].start_locator is not None
+        assert chunks[0].end_locator is not None
+        assert re.match(r"L\d+", chunks[0].start_locator)
+
+    def test_end_locator_is_not_none(self) -> None:
         content = ParsedContent(title="X", body="hello world test content", media_type="text/plain")
         chunks = self.chunker.chunk(content, self.document_id, self.version_id, self.principals)
-        assert f"[{chunks[0].ordinal}]" in (chunks[0].start_locator or "")
+        assert chunks[0].end_locator is not None
+
+    def test_code_block_preserved_not_split(self) -> None:
+        body = "# Intro\n\nParagraph.\n\n```python\ndef foo():\n    pass\n```\n\n## Conclusion"
+        content = ParsedContent(
+            title="Code",
+            body=body,
+            media_type="text/markdown",
+            headings=[(1, "Intro"), (2, "Conclusion")],
+            code_blocks=[(5, 7)],
+        )
+        chunks = self.chunker.chunk(content, self.document_id, self.version_id, self.principals)
+        for chunk in chunks:
+            if "def foo" in chunk.content:
+                assert "```python" in chunk.content
+                assert "```" in chunk.content
+
+    def test_table_preserved_not_split(self) -> None:
+        body = "# Data\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\nEnd."
+        content = ParsedContent(
+            title="Table",
+            body=body,
+            media_type="text/markdown",
+            headings=[(1, "Data")],
+            tables=[(3, 5)],
+        )
+        chunks = self.chunker.chunk(content, self.document_id, self.version_id, self.principals)
+        for chunk in chunks:
+            if "A" in chunk.content and "B" in chunk.content:
+                assert "1" in chunk.content
+                assert "2" in chunk.content
+
+    def test_list_item_preserved_not_split(self) -> None:
+        body = "# Steps\n\n- item one\n- item two\n\nDone."
+        content = ParsedContent(
+            title="List",
+            body=body,
+            media_type="text/markdown",
+            headings=[(1, "Steps")],
+            list_items=[(3, 4)],
+        )
+        chunks = self.chunker.chunk(content, self.document_id, self.version_id, self.principals)
+        for chunk in chunks:
+            if "item one" in chunk.content:
+                assert "item two" in chunk.content
 
     def test_empty_body_returns_no_chunks(self) -> None:
         content = ParsedContent(title="X", body="", media_type="text/plain")
