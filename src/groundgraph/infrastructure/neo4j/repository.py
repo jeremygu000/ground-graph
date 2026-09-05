@@ -122,7 +122,9 @@ class Neo4jGraphRepository:
     def __init__(self, driver: AsyncDriver) -> None:
         self._driver = driver
 
-    async def create_entity(self, entity: CanonicalEntity) -> CanonicalEntity:
+    async def create_entity(
+        self, entity: CanonicalEntity, _tx: Any | None = None
+    ) -> CanonicalEntity:
         cypher = _ENTITY_MERGE
         params: dict[str, Any] = {
             "entity_id": str(entity.entity_id),
@@ -131,12 +133,15 @@ class Neo4jGraphRepository:
             "aliases": entity.aliases,
             "attributes": json.dumps(entity.attributes) if entity.attributes else "{}",
         }
-        async with (
-            cast(Any, self._driver.session()) as session,
-            await session.begin_transaction() as tx,
-        ):
-            await tx.run(cypher, **params)
-            await tx.commit()
+        if _tx is not None:
+            await _tx.run(cypher, **params)
+        else:
+            async with (
+                cast(Any, self._driver.session()) as session,
+                await session.begin_transaction() as tx,
+            ):
+                await tx.run(cypher, **params)
+                await tx.commit()
         return entity
 
     async def get_entity(self, entity_id: UUID) -> CanonicalEntity | None:
@@ -157,7 +162,7 @@ class Neo4jGraphRepository:
             records = await result.data()
             return [_dict_to_entity(r) for r in records]
 
-    async def create_fact(self, fact: KnowledgeFact) -> KnowledgeFact:
+    async def create_fact(self, fact: KnowledgeFact, _tx: Any | None = None) -> KnowledgeFact:
         params: dict[str, Any] = {
             "fact_id": str(fact.fact_id),
             "subject_id": str(fact.subject_id),
@@ -172,12 +177,15 @@ class Neo4jGraphRepository:
             "extraction_method": fact.extraction_method,
             "ontology_version": fact.ontology_version,
         }
-        async with (
-            cast(Any, self._driver.session()) as session,
-            await session.begin_transaction() as tx,
-        ):
-            await tx.run(_FACT_MERGE, **params)
-            await tx.commit()
+        if _tx is not None:
+            await _tx.run(_FACT_MERGE, **params)
+        else:
+            async with (
+                cast(Any, self._driver.session()) as session,
+                await session.begin_transaction() as tx,
+            ):
+                await tx.run(_FACT_MERGE, **params)
+                await tx.commit()
         return fact
 
     async def get_fact(self, fact_id: UUID) -> KnowledgeFact | None:
@@ -205,7 +213,7 @@ class Neo4jGraphRepository:
             conditions.append("f.predicate = $predicate")
             params["predicate"] = predicate
         if object_id:
-            conditions.append("endNode(r).entity_id = $object_id")
+            conditions.append("endNode(r2).entity_id = $object_id")
             params["object_id"] = str(object_id)
         if status:
             conditions.append("f.status = $status")
@@ -228,24 +236,28 @@ class Neo4jGraphRepository:
         fact_id: UUID,
         status: str,
         superseded_by: UUID | None = None,
+        _tx: Any | None = None,
     ) -> KnowledgeFact:
         params: dict[str, Any] = {
             "fact_id": str(fact_id),
             "status": status,
             "superseded_by": str(superseded_by) if superseded_by else None,
         }
-        async with (
-            cast(Any, self._driver.session()) as session,
-            await session.begin_transaction() as tx,
-        ):
-            await tx.run(_FACT_UPDATE_STATUS, **params)
-            await tx.commit()
+        if _tx is not None:
+            await _tx.run(_FACT_UPDATE_STATUS, **params)
+        else:
+            async with (
+                cast(Any, self._driver.session()) as session,
+                await session.begin_transaction() as tx,
+            ):
+                await tx.run(_FACT_UPDATE_STATUS, **params)
+                await tx.commit()
         fact = await self.get_fact(fact_id)
         if not fact:
             raise ValueError(f"Fact {fact_id} not found after status update")
         return fact
 
-    async def create_mention(self, mention: EntityMention) -> EntityMention:
+    async def create_mention(self, mention: EntityMention, _tx: Any | None = None) -> EntityMention:
         params: dict[str, Any] = {
             "mention_id": str(mention.mention_id),
             "chunk_id": str(mention.chunk_id),
@@ -254,12 +266,15 @@ class Neo4jGraphRepository:
             "locator": mention.locator,
             "extraction_confidence": mention.extraction_confidence,
         }
-        async with (
-            cast(Any, self._driver.session()) as session,
-            await session.begin_transaction() as tx,
-        ):
-            await tx.run(_MENTION_MERGE, **params)
-            await tx.commit()
+        if _tx is not None:
+            await _tx.run(_MENTION_MERGE, **params)
+        else:
+            async with (
+                cast(Any, self._driver.session()) as session,
+                await session.begin_transaction() as tx,
+            ):
+                await tx.run(_MENTION_MERGE, **params)
+                await tx.commit()
         return mention
 
     async def find_mentions(self, chunk_id: UUID) -> list[EntityMention]:
