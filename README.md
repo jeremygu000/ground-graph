@@ -27,13 +27,16 @@ Python 3.12 · uv · FastAPI · Pydantic v2 · SQLAlchemy 2 async · Alembic · 
 ## Quick start
 
 ```bash
-make setup          # install uv deps, pre-commit
-make format         # ruff format
-make lint           # ruff check
-make typecheck      # pyright
-make test           # pytest (unit only)
-make test-integration  # bring up docker-compose stack and run integration tests
-make check          # format + lint + typecheck + test
+make setup              # install uv deps, pre-commit
+make format             # ruff format
+make lint               # ruff check
+make typecheck          # pyright + mypy
+make test               # unit tests (no Docker)
+make test-component     # Testcontainers Postgres/pgvector + Neo4j
+make test-stack         # docker-compose full-stack smoke
+make test-fault         # reserved for M11 (no-op until then)
+make test-integration   # component + stack combined
+make check              # format + lint + typecheck + unit (CI / no-Docker)
 ```
 
 ## Local infrastructure

@@ -1,13 +1,14 @@
 - **Status**: Accepted
 - **Date**: 2026-09-05
 - **Deciders**: implementation agent + user
-- **Related**: AGENTS.md §0.6 (verification commands), M1 sign-off, M1 follow-up (this ADR), future M2 adapters
+- **Related**: AGENTS.md §7 (verification commands), M1 sign-off, M1 follow-up (this ADR), future M2 adapters
 
 ## Context
 
 M1 sign-off established the full docker-compose stack as the integration
-testing substrate (12 tests, 153 unit + integration in CI). However, that
-setup is not the right shape for the next 6+ milestones:
+testing substrate (12 stack-smoke tests + 147 unit tests, all verified
+locally against Docker). However, that setup is not the right shape
+for the next 6+ milestones:
 
   1. **Cost per run** — bringing up all 7 services (Postgres, Neo4j,
      MinIO, OTel, Phoenix, Prometheus, Grafana) takes 60-90s. Running
@@ -31,15 +32,15 @@ OTel/Phoenix export pipeline) and must be preserved.
 
 ## Decision
 
-Adopt a **three-layer test split**, codified in pytest markers and
+Adopt a **four-layer test split**, codified in pytest markers and
 Makefile targets:
 
 | Layer            | Marker                                | Make target        | Docker        | Cost / run |
 |------------------|---------------------------------------|--------------------|---------------|------------|
 | Unit             | (none)                                | `make test`        | no            | ~2 s       |
-| Component        | `@pytest.mark.integration` + `@pytest.mark.component` | `make test-component` | Testcontainers (one container at a time) | ~10 s |
+| Component        | `@pytest.mark.integration` + `@pytest.mark.component` | `make test-component` | Testcontainers (one container per dependency per session) | ~10 s |
 | Stack smoke      | `@pytest.mark.integration` + `@pytest.mark.stack` | `make test-stack` | docker compose up (7 services) | ~90 s |
-| Fault injection  | `@pytest.mark.integration` + `@pytest.mark.fault` | `make test-fault` | dedicated Testcontainer (or other isolated fixture) — destructive action runs in a per-test container, never the shared compose session | isolated per test |
+| Fault injection  | `@pytest.mark.integration` + `@pytest.mark.fault` | `make test-fault` (reserved for M11) | dedicated Testcontainer (or other isolated fixture) — destructive action runs in a per-test container, never the shared compose session | isolated per test |
 | Combined         | `@pytest.mark.integration`            | `make test-integration` | both | ~100 s |
 
 Rules:
@@ -69,9 +70,9 @@ Easier:
   * M2+ repository/adapter tests can run in ~10s without the
     observability stack. CI can run `make test-component` on
     every PR and `make test-stack` only on merge to main.
-  * Fault-injection tests (M9 territory) get their own
-    `fault` marker, isolated from `component` so a destructive
-    test can never pollute the cheap component suite.
+  * Fault-injection tests (M11 territory per plan §0.3) get
+    their own `fault` marker, isolated from `component` so a
+    destructive test can never pollute the cheap component suite.
   * When a component test fails, the failure is unambiguous —
     it is the substrate (Postgres, Neo4j) or the adapter, not
     some cross-service wiring.

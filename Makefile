@@ -67,8 +67,8 @@ test-stack: ## Run docker-compose full-stack smoke tests
 	uv run pytest -q -m "integration and stack"
 
 .PHONY: test-fault
-test-fault: ## Run fault-injection tests (RESERVED for M9+; exits 5 until then)
-	@echo "test-fault is reserved for M9+ (governance / security / adversarial)."
+test-fault: ## Reserved no-op until M11 (no fault tests yet; see ADR-010)
+	@echo "test-fault is reserved for M11 (production hardening / pilot readiness)."
 	@echo "No fault-marked tests exist yet; this target is intentionally a no-op."
 	@exit 0
 

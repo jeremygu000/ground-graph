@@ -48,7 +48,13 @@ groundgraph/
 ├── ontology/{entity_types,predicates,constraints}.yaml + versions/
 ├── evals/{datasets,metrics,judges,regression,reports}/
 ├── migrations/                       # Alembic
-├── tests/{unit,integration,contract,end_to_end,adversarial}/
+├── tests/
+│   ├── unit/                         # no Docker; fast
+│   ├── component/                    # Testcontainers (Postgres/pgvector, Neo4j)
+│   ├── integration/                  # full docker-compose stack smoke
+│   ├── contract/                     # public API contract tests
+│   ├── end_to_end/                   # cross-stack end-to-end
+│   └── adversarial/                  # adversarial / red-team input tests
 ├── deploy/{docker,prometheus,grafana,phoenix}/
 ├── docs/{adr,api,operations,evaluation}/
 ├── scripts/
@@ -57,6 +63,10 @@ groundgraph/
 ├── Makefile
 └── .env.example
 ```
+
+See ADR-010 for the rationale behind splitting `component/` out of
+`integration/` (Testcontainers single-dep fixtures) vs retaining
+`integration/` for the full docker-compose stack smoke.
 
 ## 4. 依赖方向规则(铁律)
 
@@ -99,17 +109,30 @@ domain  ←  application  ←  workflows / API  ←  infrastructure composition
 
 ## 7. 验证命令(每 milestone 必跑)
 
+`make check` 是**本地和 CI 唯一需要的入口**,会自动跑下面的全部步骤。**它只跑 unit + 静态检查**(无 Docker),所以在所有环境(包括没有 Docker 的 CI runner)上都是可重复的:
+
 ```bash
-uv sync --locked --all-extras
-uv run ruff format --check .
-uv run ruff check .
-uv run pyright
-uv run mypy
-uv run pytest --cov=src/groundgraph --cov-fail-under=85
+make check
+# 内部步骤:
+#   uv sync --locked --all-extras
+#   uv run ruff format --check .
+#   uv run ruff check .
+#   uv run pyright
+#   uv run mypy
+#   uv run pytest -m "not integration and not e2e" --cov=src/groundgraph --cov-fail-under=85
 ```
 
-集成测试需要 Docker 运行中的依赖,使用 `make test-integration` 调用。
-`make check` 会自动运行以上全部步骤,本地和 CI 都用它即可。
+需要 Docker 的测试分层如下(每个 milestone **至少** 在该层有 1 个对应测试才能 sign-off):
+
+```bash
+make test-component   # Testcontainers(Postgres/pgvector + Neo4j); 涉及真实 adapter 时
+make test-stack       # docker-compose 7-service 全栈 smoke;
+                      #   stack/telemetry/deploy 变化或 milestone sign-off 时
+make test-fault       # 故障注入;**reserved no-op until M11**,届时引入
+make test-integration # test-component + test-stack 全部,本地全套
+```
+
+集成测试需要 Docker 运行中的依赖。`make test-component` 和 `make test-stack` 在 Docker 不可用时**自动 skip**,不会假绿。
 
 ## 8. 完成定义(DoD)
 
