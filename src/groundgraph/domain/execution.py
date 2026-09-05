@@ -84,7 +84,7 @@ class ExecutionRun(BaseModel):
     with the principal list it is the cross-cutting ACL.
     """
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
 
     run_id: UUID
     workflow: str  # e.g. "query", "ingest", "evaluate"
@@ -126,7 +126,7 @@ class ExecutionStep(BaseModel):
     fact.
     """
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
 
     step_id: UUID
     run_id: UUID

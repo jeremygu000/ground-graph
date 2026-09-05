@@ -50,7 +50,7 @@ class OutboxEvent(BaseModel):
     but typed by the producer in application code.
     """
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
 
     event_id: UUID
     aggregate_type: str  # "document" | "chunk" | "entity" | "fact"

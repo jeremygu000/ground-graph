@@ -24,7 +24,7 @@ class SourceDescriptor(BaseModel):
     rule 8).
     """
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
 
     source_id: UUID
     source_type: Literal["filesystem", "repository", "object_store", "api"]
@@ -48,7 +48,7 @@ class ParsedDocument(BaseModel):
     possibly a new ``document_id`` (if the source URI is new).
     """
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
 
     document_id: UUID
     version_id: UUID
@@ -64,6 +64,11 @@ class ParsedDocument(BaseModel):
     @classmethod
     def _validate_metadata(cls, value: object) -> object:
         return validate_json_value(value)
+
+    @field_validator("metadata", mode="after")
+    @classmethod
+    def _freeze_metadata(cls, value: dict[str, JsonValue]) -> dict[str, JsonValue]:
+        return validate_json_value(value)  # type: ignore[return-value]
 
 
 class Chunk(BaseModel):

@@ -63,6 +63,7 @@ class Source(Base):
     source_type: Mapped[str] = mapped_column(String(50), nullable=False)
     uri: Mapped[str] = mapped_column(Text, nullable=False)
     classification: Mapped[str] = mapped_column(String(100), nullable=False)
+    tenant_id: Mapped[str] = mapped_column(String(255), nullable=False)
     allowed_principals: Mapped[list[str]] = mapped_column(
         ARRAY(String), nullable=False, default=list
     )

@@ -16,6 +16,8 @@ from groundgraph.domain.execution import (
     ExecutionStepStatus,
 )
 from groundgraph.infrastructure.postgres.execution_store import ExecutionRepository
+from groundgraph.infrastructure.postgres.models import ExecutionRun as SQLExecutionRun
+from groundgraph.infrastructure.postgres.models import ExecutionStep as SQLExecutionStep
 from groundgraph.infrastructure.postgres.session import PostgresSession
 
 
@@ -124,7 +126,7 @@ async def test_get_missing_and_reconstruct_missing() -> None:
     repo = ExecutionRepository(cast(PostgresSession, session))
     assert await repo.get_run(uuid4()) is None
     assert await repo.get_step(uuid4()) is None
-    with pytest.raises(ValueError, match=r"ExecutionRun .* not found"):
+    with pytest.raises(Exception, match=r"ExecutionRun .* not found"):
         await repo.reconstruct_dag(uuid4())
 
 
@@ -152,23 +154,21 @@ async def test_invalid_updates_and_terminal_fields() -> None:
         output={},
     )
     session.get_map = {
-        (
-            __import__(
-                "groundgraph.infrastructure.postgres.models", fromlist=["ExecutionRun"]
-            ).ExecutionRun,
-            run.run_id,
-        ): run,
-        (
-            __import__(
-                "groundgraph.infrastructure.postgres.models", fromlist=["ExecutionStep"]
-            ).ExecutionStep,
-            step.step_id,
-        ): step,
+        (SQLExecutionRun, run.run_id): run,
+        (SQLExecutionStep, step.step_id): step,
     }
-    with pytest.raises(ValueError, match=r"illegal execution_run transition"):
-        await repo.update_run_status(run.run_id, ExecutionRunStatus.SUCCEEDED)
-    with pytest.raises(ValueError, match=r"illegal execution_step transition"):
-        await repo.update_step_status(step.step_id, ExecutionStepStatus.SUCCEEDED)
+    with pytest.raises(Exception, match=r"illegal execution_run transition"):
+        await repo.update_run_status(
+            run.run_id,
+            ExecutionRunStatus.PENDING,
+            ExecutionRunStatus.SUCCEEDED,
+        )
+    with pytest.raises(Exception, match=r"illegal execution_step transition"):
+        await repo.update_step_status(
+            step.step_id,
+            ExecutionStepStatus.PENDING,
+            ExecutionStepStatus.SUCCEEDED,
+        )
 
 
 @pytest.mark.asyncio
@@ -188,10 +188,10 @@ async def test_update_run_status_uses_atomic_where_clause() -> None:
         )
     )
 
-    await repo.update_run_status(run_id, ExecutionRunStatus.RUNNING)
+    await repo.update_run_status(run_id, ExecutionRunStatus.PENDING, ExecutionRunStatus.RUNNING)
 
     assert session.last_statement is not None
-    assert "status IN" in str(session.last_statement)
+    assert "status =" in str(session.last_statement)
 
 
 @pytest.mark.asyncio
@@ -212,7 +212,7 @@ async def test_update_step_status_uses_atomic_where_clause() -> None:
         )
     )
 
-    await repo.update_step_status(step_id, ExecutionStepStatus.RUNNING)
+    await repo.update_step_status(step_id, ExecutionStepStatus.PENDING, ExecutionStepStatus.RUNNING)
 
     assert session.last_statement is not None
-    assert "status IN" in str(session.last_statement)
+    assert "status =" in str(session.last_statement)

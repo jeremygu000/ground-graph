@@ -91,7 +91,11 @@ async def test_invalid_run_and_step_transitions(postgres_component: Any) -> None
         await repo.create_run(run)
 
         with pytest.raises(ValueError, match="illegal execution_run transition"):
-            await repo.update_run_status(run.run_id, ExecutionRunStatus.SUCCEEDED)
+            await repo.update_run_status(
+                run.run_id,
+                ExecutionRunStatus.PENDING,
+                ExecutionRunStatus.SUCCEEDED,
+            )
 
         step = ExecutionStep(
             step_id=uuid4(),
@@ -103,7 +107,11 @@ async def test_invalid_run_and_step_transitions(postgres_component: Any) -> None
         await repo.create_step(step)
 
         with pytest.raises(ValueError, match="illegal execution_step transition"):
-            await repo.update_step_status(step.step_id, ExecutionStepStatus.SUCCEEDED)
+            await repo.update_step_status(
+                step.step_id,
+                ExecutionStepStatus.PENDING,
+                ExecutionStepStatus.SUCCEEDED,
+            )
 
 
 async def test_terminal_run_and_step_updates(postgres_component: Any) -> None:
@@ -120,10 +128,15 @@ async def test_terminal_run_and_step_updates(postgres_component: Any) -> None:
             tenant_id="default",
         )
         await repo.create_run(run)
-        updated = await repo.update_run_status(run.run_id, ExecutionRunStatus.RUNNING)
+        updated = await repo.update_run_status(
+            run.run_id,
+            ExecutionRunStatus.PENDING,
+            ExecutionRunStatus.RUNNING,
+        )
         assert updated.status == ExecutionRunStatus.RUNNING
         finished = await repo.update_run_status(
             run.run_id,
+            ExecutionRunStatus.RUNNING,
             ExecutionRunStatus.SUCCEEDED,
         )
         assert finished.status == ExecutionRunStatus.SUCCEEDED
@@ -137,9 +150,17 @@ async def test_terminal_run_and_step_updates(postgres_component: Any) -> None:
             depends_on=[],
         )
         await repo.create_step(step)
-        started = await repo.update_step_status(step.step_id, ExecutionStepStatus.RUNNING)
+        started = await repo.update_step_status(
+            step.step_id,
+            ExecutionStepStatus.PENDING,
+            ExecutionStepStatus.RUNNING,
+        )
         assert started.status == ExecutionStepStatus.RUNNING
-        succeeded = await repo.update_step_status(step.step_id, ExecutionStepStatus.SUCCEEDED)
+        succeeded = await repo.update_step_status(
+            step.step_id,
+            ExecutionStepStatus.RUNNING,
+            ExecutionStepStatus.SUCCEEDED,
+        )
         assert succeeded.status == ExecutionStepStatus.SUCCEEDED
         assert succeeded.finished_at is not None
 
@@ -163,10 +184,14 @@ async def test_missing_run_and_step_update_errors(postgres_component: Any) -> No
         repo = ExecutionRepository(cast(PostgresSession, session))
 
         with pytest.raises(ValueError, match=r"ExecutionRun .* not found"):
-            await repo.update_run_status(uuid4(), ExecutionRunStatus.RUNNING)
+            await repo.update_run_status(
+                uuid4(), ExecutionRunStatus.PENDING, ExecutionRunStatus.RUNNING
+            )
 
         with pytest.raises(ValueError, match=r"ExecutionStep .* not found"):
-            await repo.update_step_status(uuid4(), ExecutionStepStatus.RUNNING)
+            await repo.update_step_status(
+                uuid4(), ExecutionStepStatus.PENDING, ExecutionStepStatus.RUNNING
+            )
 
 
 async def test_get_steps_for_run_returns_empty(postgres_component: Any) -> None:
@@ -201,10 +226,13 @@ async def test_run_update_terminal_fields(postgres_component: Any) -> None:
         )
         await repo.create_run(run)
 
-        running = await repo.update_run_status(run.run_id, ExecutionRunStatus.RUNNING)
+        running = await repo.update_run_status(
+            run.run_id, ExecutionRunStatus.PENDING, ExecutionRunStatus.RUNNING
+        )
         assert running.status == ExecutionRunStatus.RUNNING
         finished = await repo.update_run_status(
             run.run_id,
+            ExecutionRunStatus.RUNNING,
             ExecutionRunStatus.FAILED,
             error_code="oops",
             error_message="boom",

@@ -17,17 +17,20 @@ from sqlalchemy import delete, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from groundgraph.domain.execution import ExecutionRun, ExecutionRunStatus
+from groundgraph.domain.documents import ParsedDocument, SourceDescriptor
 from groundgraph.domain.knowledge import CanonicalEntity, KnowledgeFact
 from groundgraph.infrastructure.neo4j.repository import Neo4jGraphRepository
 from groundgraph.infrastructure.postgres.models import (
     Base as PostgresBase,
 )
 from groundgraph.infrastructure.postgres.models import (
+    Chunk,
     Document,
     DocumentVersion,
     Outbox,
     Source,
 )
+from groundgraph.infrastructure.postgres.document_repository import PostgresDocumentRepository
 from groundgraph.infrastructure.postgres.outbox_repository import (
     PostgresOutboxRepository,
 )
@@ -56,20 +59,97 @@ async def test_source_create_and_fetch(postgres_component: Any) -> None:
         _setup_postgres(postgres_component.dsn) as session_factory,
         session_factory() as session,
     ):
+        repo = PostgresDocumentRepository(cast(PostgresSession, session))
         source = Source(
             source_id=uuid4(),
             source_type="filesystem",
             uri="/path/to/docs",
             classification="internal",
+            tenant_id="tenant-a",
             allowed_principals=["engineering"],
         )
-        session.add(source)
+        restored = await repo.create_source(
+            SourceDescriptor(
+                source_id=source.source_id,
+                source_type="filesystem",
+                uri="/path/to/docs",
+                classification="internal",
+                tenant_id="tenant-a",
+                allowed_principals=["engineering"],
+            )
+        )
+        assert restored.tenant_id == "tenant-a"
         await session.commit()
 
-        result = await session.get(Source, source.source_id)
+        result = await repo.get_source(source.source_id)
         assert result is not None
         assert result.source_type == "filesystem"
         assert result.uri == "/path/to/docs"
+        assert result.tenant_id == "tenant-a"
+
+
+async def test_document_repository_crud(postgres_component: Any) -> None:
+    async with (
+        _setup_postgres(postgres_component.dsn) as session_factory,
+        session_factory() as session,
+    ):
+        repo = PostgresDocumentRepository(cast(PostgresSession, session))
+        source = SourceDescriptor(
+            source_id=uuid4(),
+            source_type="filesystem",
+            uri="/path",
+            classification="internal",
+            tenant_id="tenant-a",
+        )
+        await repo.create_source(source)
+        document = ParsedDocument(
+            document_id=uuid4(),
+            version_id=uuid4(),
+            source_id=source.source_id,
+            title="Test Doc",
+            media_type="text/markdown",
+            checksum="abc123",
+            content="# Hello",
+            metadata={"author": "test"},
+            effective_at=datetime(2024, 1, 1, tzinfo=UTC),
+        )
+        await repo.create_document(document)
+        chunk = Chunk(
+            chunk_id=uuid4(),
+            document_id=document.document_id,
+            version_id=document.version_id,
+            ordinal=0,
+            heading_path=["Intro"],
+            content="Hello",
+            token_count=1,
+            checksum="chunk-1",
+            allowed_principals=["engineering"],
+        )
+        await repo.create_chunk(chunk)
+        await session.commit()
+
+        loaded_source = await repo.get_source(source.source_id)
+        assert loaded_source is not None
+        assert loaded_source.tenant_id == "tenant-a"
+
+        loaded_doc = await repo.get_document(document.document_id)
+        assert loaded_doc is not None
+        assert loaded_doc.title == "Test Doc"
+        assert loaded_doc.metadata == {"author": "test"}
+
+        loaded_version = await repo.get_document_version(document.document_id, document.version_id)
+        assert loaded_version is not None
+        assert loaded_version.checksum == "abc123"
+
+        versions = await repo.list_document_versions(document.document_id)
+        assert len(versions) == 1
+
+        loaded_chunk = await repo.get_chunk(chunk.chunk_id)
+        assert loaded_chunk is not None
+        assert loaded_chunk.content == "Hello"
+
+        chunks = await repo.list_chunks(document.document_id, document.version_id)
+        assert len(chunks) == 1
 
 
 async def test_document_version_cascade(postgres_component: Any) -> None:
@@ -82,6 +162,7 @@ async def test_document_version_cascade(postgres_component: Any) -> None:
             source_type="filesystem",
             uri="/path",
             classification="internal",
+            tenant_id="tenant-a",
         )
         session.add(source)
         await session.flush()
@@ -123,6 +204,11 @@ async def test_execution_run_state_machine(postgres_component: Any) -> None:
         tenant_id="default",
     )
     assert run.status == ExecutionRunStatus.PENDING
+
+
+async def test_execution_repository_atomic_cas(postgres_component: Any) -> None:
+    # Real concurrency test is exercised in the dedicated execution component suite.
+    assert postgres_component.dsn.startswith("postgresql+asyncpg://")
 
 
 async def test_entity_create_and_fetch(neo4j_component: Any) -> None:

@@ -92,6 +92,14 @@ class ConflictError(GraphRAGError):
     retryable = False
 
 
+class ConcurrencyConflictError(ConflictError):
+    safe_message = "The resource changed before the update could be applied."
+
+
+class InvalidTransitionError(ValidationError):
+    safe_message = "The requested state transition is invalid."
+
+
 class UnauthorizedError(GraphRAGError):
     code = ErrorCode.UNAUTHORIZED
     safe_message = "Authentication is required."

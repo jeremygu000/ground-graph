@@ -5,10 +5,11 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
+from groundgraph.application.errors import ConcurrencyConflictError, InvalidTransitionError, NotFoundError
 from groundgraph.domain.execution import (
     ExecutionRun,
     ExecutionRunStatus,
@@ -20,7 +21,7 @@ from groundgraph.infrastructure.postgres.execution_store import ExecutionReposit
 
 @dataclass
 class _RunRow:
-    run_id: object
+    run_id: UUID
     workflow: str
     status: str
     principal: str
@@ -35,8 +36,8 @@ class _RunRow:
 
 @dataclass
 class _StepRow:
-    step_id: object
-    run_id: object
+    step_id: UUID
+    run_id: UUID
     name: str
     status: str
     attempt: int
@@ -241,11 +242,11 @@ async def test_execution_repository_invalid_updates_and_reconstruct_missing_run(
     session = _Session()
     repo = ExecutionRepository(session)
 
-    with pytest.raises(ValueError, match=r"ExecutionRun .* not found"):
-        await repo.update_run_status(uuid4(), ExecutionRunStatus.RUNNING)
+    with pytest.raises(NotFoundError, match=r"ExecutionRun .* not found"):
+        await repo.update_run_status(uuid4(), ExecutionRunStatus.PENDING, ExecutionRunStatus.RUNNING)
 
-    with pytest.raises(ValueError, match=r"ExecutionStep .* not found"):
-        await repo.update_step_status(uuid4(), ExecutionStepStatus.RUNNING)
+    with pytest.raises(NotFoundError, match=r"ExecutionStep .* not found"):
+        await repo.update_step_status(uuid4(), ExecutionStepStatus.PENDING, ExecutionStepStatus.RUNNING)
 
     with pytest.raises(ValueError, match=r"ExecutionRun .* not found"):
         await repo.reconstruct_dag(uuid4())
@@ -269,7 +270,7 @@ async def test_execution_repository_terminal_run_and_step_updates() -> None:
             output={},
         )
     )
-    await repo.update_run_status(run_id, ExecutionRunStatus.RUNNING)
+    await repo.update_run_status(run_id, ExecutionRunStatus.PENDING, ExecutionRunStatus.RUNNING)
 
     session.execute_factory = _ExecuteFactory(
         row=_RunRow(
@@ -283,7 +284,9 @@ async def test_execution_repository_terminal_run_and_step_updates() -> None:
             finished_at=datetime.now(UTC),
         )
     )
-    updated_run = await repo.update_run_status(run_id, ExecutionRunStatus.SUCCEEDED)
+    updated_run = await repo.update_run_status(
+        run_id, ExecutionRunStatus.RUNNING, ExecutionRunStatus.SUCCEEDED
+    )
     assert updated_run.status == ExecutionRunStatus.SUCCEEDED
     assert updated_run.finished_at is not None
 
@@ -300,7 +303,7 @@ async def test_execution_repository_terminal_run_and_step_updates() -> None:
             created_at=datetime.now(UTC),
         )
     )
-    await repo.update_step_status(step_id, ExecutionStepStatus.RUNNING)
+    await repo.update_step_status(step_id, ExecutionStepStatus.PENDING, ExecutionStepStatus.RUNNING)
 
     session.execute_factory = _ExecuteFactory(
         row=_StepRow(
@@ -316,6 +319,46 @@ async def test_execution_repository_terminal_run_and_step_updates() -> None:
             created_at=datetime.now(UTC),
         )
     )
-    updated_step = await repo.update_step_status(step_id, ExecutionStepStatus.SUCCEEDED)
+    updated_step = await repo.update_step_status(
+        step_id, ExecutionStepStatus.RUNNING, ExecutionStepStatus.SUCCEEDED
+    )
     assert updated_step.status == ExecutionStepStatus.SUCCEEDED
     assert updated_step.finished_at is not None
+
+
+@pytest.mark.asyncio
+async def test_execution_repository_invalid_transition_rejected_before_write() -> None:
+    session = _Session()
+    repo = ExecutionRepository(session)
+
+    with pytest.raises(InvalidTransitionError):
+        await repo.update_run_status(uuid4(), ExecutionRunStatus.PENDING, ExecutionRunStatus.SUCCEEDED)
+
+    with pytest.raises(InvalidTransitionError):
+        await repo.update_step_status(uuid4(), ExecutionStepStatus.PENDING, ExecutionStepStatus.SUCCEEDED)
+
+
+@pytest.mark.asyncio
+async def test_execution_repository_conflict_when_expected_status_mismatches() -> None:
+    session = _Session()
+    repo = ExecutionRepository(session)
+
+    run_id = uuid4()
+    session.get_map = {
+        (
+            __import__("groundgraph.infrastructure.postgres.models", fromlist=["ExecutionRun"]).ExecutionRun,
+            run_id,
+        ): _RunRow(
+            run_id=run_id,
+            workflow="query",
+            status=ExecutionRunStatus.RUNNING.value,
+            principal="engineering",
+            tenant_id="default",
+            input={},
+            output={},
+        )
+    }
+    session.execute_factory = _ExecuteFactory(row=None)
+
+    with pytest.raises(ConcurrencyConflictError):
+        await repo.update_run_status(run_id, ExecutionRunStatus.PENDING, ExecutionRunStatus.RUNNING)

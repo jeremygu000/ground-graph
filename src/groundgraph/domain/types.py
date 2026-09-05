@@ -8,9 +8,25 @@ allowed (see AGENTS.md §4).
 from __future__ import annotations
 
 import math
-from typing import Any, cast
+from typing import TypeAlias
 
-JsonValue = Any
+
+class FrozenJsonList(list[object]):
+    def _immutable(self, *args: object, **kwargs: object) -> None:
+        raise TypeError("JSON containers are immutable once validated")
+
+    append = extend = insert = pop = remove = clear = sort = reverse = _immutable
+    __setitem__ = __delitem__ = __iadd__ = __imul__ = _immutable
+
+
+class FrozenJsonDict(dict[str, object]):
+    def _immutable(self, *args: object, **kwargs: object) -> None:
+        raise TypeError("JSON containers are immutable once validated")
+
+    __setitem__ = __delitem__ = clear = pop = popitem = setdefault = update = _immutable
+
+
+JsonValue: TypeAlias = bool | int | float | str | None | FrozenJsonList | FrozenJsonDict
 
 
 def validate_json_value(value: object) -> object:
@@ -26,17 +42,15 @@ def validate_json_value(value: object) -> object:
             raise ValueError("JSON float must not be NaN or Infinity")
         return value
     if isinstance(value, list):
-        items = cast(list[object], value)
-        for item in items:
-            validate_json_value(item)
+        items = FrozenJsonList(validate_json_value(item) for item in value)
         return items
     if isinstance(value, dict):
-        mapping = cast(dict[object, object], value)
-        for k, v in mapping.items():
+        mapping = FrozenJsonDict()
+        for k, v in value.items():
             if not isinstance(k, str):
                 msg = "JSON object key must be str, got " + type(k).__name__
                 raise TypeError(msg)
-            validate_json_value(v)
+            dict.__setitem__(mapping, k, validate_json_value(v))
         return mapping
     raise ValueError(
         f"JsonValue must be str | int | float | bool | None | list | dict, "

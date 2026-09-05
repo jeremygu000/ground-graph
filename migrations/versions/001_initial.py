@@ -34,6 +34,7 @@ def upgrade() -> None:
         sa.Column("source_type", sa.String(length=50), nullable=False),
         sa.Column("uri", sa.Text(), nullable=False),
         sa.Column("classification", sa.String(length=100), nullable=False),
+        sa.Column("tenant_id", sa.String(length=255), nullable=False),
         sa.Column(
             "allowed_principals",
             postgresql.ARRAY(sa.String()),

@@ -26,7 +26,7 @@ class EntityMention(BaseModel):
     CanonicalEntity by the entity-resolution workflow (M5+).
     """
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
 
     mention_id: UUID
     chunk_id: UUID
@@ -44,7 +44,7 @@ class CanonicalEntity(BaseModel):
     entity; the knowledge graph builds an index over them.
     """
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
 
     entity_id: UUID
     entity_type: str
@@ -72,7 +72,7 @@ class KnowledgeFact(BaseModel):
     See ADR-003 for the rationale.
     """
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
 
     fact_id: UUID
     subject_id: UUID
