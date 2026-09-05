@@ -29,7 +29,17 @@ class PostgresDocumentRepository(DocumentRepository):
     def __init__(self, session: PostgresSession) -> None:
         self._session = session
 
-    async def create_source(self, source: SourceDescriptor) -> SourceDescriptor:
+    async def find_or_create_source(self, source: SourceDescriptor) -> SourceDescriptor:
+        result = await self._session.execute(
+            select(SourceModel).where(
+                SourceModel.tenant_id == source.tenant_id,
+                SourceModel.source_type == source.source_type,
+                SourceModel.uri == source.uri,
+            )
+        )
+        existing = result.scalar_one_or_none()
+        if existing is not None:
+            return self._source_to_domain(existing)
         model = SourceModel(
             source_id=source.source_id,
             source_type=source.source_type,
@@ -53,8 +63,8 @@ class PostgresDocumentRepository(DocumentRepository):
         result = await self._session.execute(select(SourceModel).order_by(SourceModel.created_at))
         return [self._source_to_domain(row) for row in result.scalars().all()]
 
-    async def find_active_document_by_source(
-        self, source_id: UUID, file_path: str
+    async def find_active_document_by_canonical_locator(
+        self, source_id: UUID, canonical_locator: str
     ) -> tuple[UUID, UUID] | None:
         result = await self._session.execute(
             select(DocumentModel)
@@ -68,7 +78,7 @@ class PostgresDocumentRepository(DocumentRepository):
             if version_row is None:
                 continue
             metadata = dict(version_row.doc_metadata) if version_row.doc_metadata else {}
-            if metadata.get("file_path") == file_path:
+            if metadata.get("canonical_locator") == canonical_locator:
                 return (doc_row.document_id, version_row.version_id)
         return None
 

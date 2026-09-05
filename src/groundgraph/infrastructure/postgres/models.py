@@ -80,6 +80,15 @@ class Source(Base):
         "Document", back_populates="source", cascade="all, delete-orphan"
     )
 
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "source_type",
+            "uri",
+            name="uq_sources_tenant_type_uri",
+        ),
+    )
+
 
 class SourceSyncState(Base):
     __tablename__ = "source_sync_state"

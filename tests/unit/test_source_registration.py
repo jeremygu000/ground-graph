@@ -15,7 +15,7 @@ class _FakeDocumentRepository:
     def __init__(self) -> None:
         self.created_sources: list[SourceDescriptor] = []
 
-    async def create_source(self, source: SourceDescriptor) -> SourceDescriptor:
+    async def find_or_create_source(self, source: SourceDescriptor) -> SourceDescriptor:
         self.created_sources.append(source)
         return source
 

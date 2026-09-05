@@ -168,20 +168,21 @@ async def test_document_repository_happy_paths() -> None:
 
     session = _Session(
         responses=[
-            _Result(row=None),  # create_document existing lookup
-            _Result(),  # create_document upsert
-            _Result(row=source_row),
-            _Result(rows=[source_row, _source_model(uuid4(), "/docs/b")]),
-            _Result(row=document_row),
-            _Result(row=version_row),
-            _Result(row=document_row),
-            _Result(row=version_row),
-            _Result(row=document_row),
-            _Result(rows=[version_row, older_version_row]),
-            _Result(row=chunk_row),
-            _Result(rows=[chunk_row, later_chunk_row]),
-            _Result(),
-            _Result(),
+            _Result(row=None),  # 0: find_or_create_source SELECT (source not found)
+            _Result(),  # 1: create_document existing lookup
+            _Result(),  # 2: create_document upsert
+            _Result(row=source_row),  # 3: get_source
+            _Result(rows=[source_row, _source_model(uuid4(), "/docs/b")]),  # 4: list_sources
+            _Result(row=document_row),  # 5: get_document
+            _Result(row=version_row),  # 6: get_document_version
+            _Result(row=document_row),  # 7: get_document
+            _Result(row=version_row),  # 8: get_document_version
+            _Result(row=document_row),  # 9: get_document
+            _Result(rows=[version_row, older_version_row]),  # 10: list_document_versions
+            _Result(row=chunk_row),  # 11: get_chunk
+            _Result(rows=[chunk_row, later_chunk_row]),  # 12: list_chunks
+            _Result(),  # 13: delete_document (versions)
+            _Result(),  # 14: delete_document (versions)
         ]
     )
     repo = PostgresDocumentRepository(cast(Any, session))
@@ -217,7 +218,7 @@ async def test_document_repository_happy_paths() -> None:
         allowed_principals=["engineering"],
     )
 
-    assert await repo.create_source(created_source) == created_source
+    assert await repo.find_or_create_source(created_source) == created_source
     assert await repo.create_document(created_document) == created_document
     assert await repo.create_chunk(created_chunk) == created_chunk
 
@@ -254,7 +255,7 @@ async def test_document_repository_happy_paths() -> None:
 
     assert session.flushed == 3
     assert len(session.added) == 3
-    assert len(session.executed) == 14
+    assert len(session.executed) == 15
 
 
 @pytest.mark.asyncio

@@ -80,7 +80,7 @@ async def test_source_create_and_fetch(postgres_component: Any) -> None:
             tenant_id="tenant-a",
             allowed_principals=["engineering"],
         )
-        restored = await repo.create_source(
+        restored = await repo.find_or_create_source(
             SourceDescriptor(
                 source_id=source.source_id,
                 source_type="filesystem",
@@ -113,7 +113,7 @@ async def test_document_repository_crud(postgres_component: Any) -> None:
             classification="internal",
             tenant_id="tenant-a",
         )
-        await repo.create_source(source)
+        await repo.find_or_create_source(source)
         document = ParsedDocument(
             document_id=uuid4(),
             version_id=uuid4(),
@@ -188,8 +188,8 @@ async def test_source_lifecycle_and_list_sources(postgres_component: Any) -> Non
             allowed_principals=["security"],
         )
 
-        await repo.create_source(source_a)
-        await repo.create_source(source_b)
+        await repo.find_or_create_source(source_a)
+        await repo.find_or_create_source(source_b)
         await session.commit()
 
         loaded = await repo.get_source(source_a.source_id)
@@ -216,11 +216,11 @@ async def test_document_current_version_fallback_and_delete(
         source = SourceDescriptor(
             source_id=uuid4(),
             source_type="filesystem",
-            uri="/docs",
+            uri="/docs/test_document_current_version_fallback_and_delete",
             classification="internal",
             tenant_id="tenant-a",
         )
-        await repo.create_source(source)
+        await repo.find_or_create_source(source)
 
         document = ParsedDocument(
             document_id=uuid4(),
@@ -282,11 +282,11 @@ async def test_document_version_lifecycle_and_delete(postgres_component: Any) ->
         source = SourceDescriptor(
             source_id=uuid4(),
             source_type="filesystem",
-            uri="/docs",
+            uri="/docs/test_document_version_lifecycle_and_delete",
             classification="internal",
             tenant_id="tenant-a",
         )
-        await repo.create_source(source)
+        await repo.find_or_create_source(source)
 
         document_id = uuid4()
         version_v1 = uuid4()
@@ -365,11 +365,11 @@ async def test_document_current_version_must_belong_to_same_document(
         source = SourceDescriptor(
             source_id=uuid4(),
             source_type="filesystem",
-            uri="/docs",
+            uri="/docs/test_document_current_version_must_belong_to_same_document",
             classification="internal",
             tenant_id="tenant-a",
         )
-        await repo.create_source(source)
+        await repo.find_or_create_source(source)
 
         doc_a = ParsedDocument(
             document_id=uuid4(),
@@ -421,11 +421,11 @@ async def test_chunk_lifecycle_and_listing(postgres_component: Any) -> None:
         source = SourceDescriptor(
             source_id=uuid4(),
             source_type="filesystem",
-            uri="/docs",
+            uri="/docs/test_chunk_lifecycle_and_listing",
             classification="internal",
             tenant_id="tenant-a",
         )
-        await repo.create_source(source)
+        await repo.find_or_create_source(source)
 
         document = ParsedDocument(
             document_id=uuid4(),
@@ -488,11 +488,11 @@ async def test_chunk_version_must_belong_to_same_document(postgres_component: An
         source = SourceDescriptor(
             source_id=uuid4(),
             source_type="filesystem",
-            uri="/docs",
+            uri="/docs/test_chunk_version_must_belong_to_same_document",
             classification="internal",
             tenant_id="tenant-a",
         )
-        await repo.create_source(source)
+        await repo.find_or_create_source(source)
 
         doc_a = ParsedDocument(
             document_id=uuid4(),
@@ -544,14 +544,16 @@ async def test_document_version_cascade(postgres_component: Any) -> None:
         _setup_postgres(postgres_component.dsn) as session_factory,
         session_factory() as session,
     ):
-        source = SqlSource(
+        repo = PostgresDocumentRepository(cast(PostgresSession, session))
+
+        source_descriptor = SourceDescriptor(
             source_id=uuid4(),
             source_type="filesystem",
-            uri="/path",
+            uri="/path/test_document_version_cascade",
             classification="internal",
             tenant_id="tenant-a",
         )
-        session.add(source)
+        source = await repo.find_or_create_source(source_descriptor)
         await session.flush()
 
         doc = SqlDocument(
@@ -603,7 +605,7 @@ async def test_postgres_uow_rolls_back_document_and_outbox(postgres_component: A
                     classification="internal",
                     tenant_id="tenant-a",
                 )
-                await docs.create_source(source)
+                await docs.find_or_create_source(source)
 
                 document = ParsedDocument(
                     document_id=document_id,

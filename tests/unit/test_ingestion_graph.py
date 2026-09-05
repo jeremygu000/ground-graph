@@ -1,8 +1,4 @@
-"""Unit tests for the LangGraph ingestion workflow.
-
-Coverage target: src/groundgraph/workflows/ingestion_graph.py
-Single-node workflow: ingest — delegates to IngestionService.
-"""
+"""Unit tests for the LangGraph ingestion workflow."""
 
 from __future__ import annotations
 
@@ -50,11 +46,14 @@ class _FakeDocumentRepository:
     def set_checksum_override(self, document_id: Any, version_id: Any, checksum: str) -> None:
         self._checksum_override[(document_id, version_id)] = checksum
 
+    async def find_or_create_source(self, source: SourceDescriptor) -> SourceDescriptor:
+        return source
+
     async def get_source(self, source_id: Any) -> SourceDescriptor | None:
         return self.sources.get(str(source_id))
 
-    async def find_active_document_by_source(
-        self, source_id: Any, file_path: str
+    async def find_active_document_by_canonical_locator(
+        self, source_id: Any, canonical_locator: str
     ) -> tuple[Any, Any] | None:
         return self._find_result
 
@@ -76,13 +75,33 @@ class _FakeDocumentRepository:
         self.chunks.append(chunk)
 
 
+class _FakeIngestionUoW:
+    def __init__(self, docs: _FakeDocumentRepository, outbox: _FakeOutboxRepository) -> None:
+        self.documents = docs
+        self.outbox = outbox
+
+    async def __aenter__(self) -> Any:
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        pass
+
+    async def commit(self) -> None:
+        pass
+
+    async def rollback(self) -> None:
+        pass
+
+
 def _build_workflow() -> tuple[IngestionWorkflow, _FakeDocumentRepository, _FakeOutboxRepository]:
-    docs: Any = _FakeDocumentRepository()
-    outbox: Any = _FakeOutboxRepository()
+    docs = _FakeDocumentRepository()
+    outbox = _FakeOutboxRepository()
     store: Any = _FakeObjectStore()
-    service = IngestionService(
-        documents=docs, object_store=store, outbox_repo=outbox, chunker=Chunker()
-    )
+
+    def uow_factory() -> Any:
+        return _FakeIngestionUoW(docs, outbox)
+
+    service = IngestionService(uow_factory=uow_factory, object_store=store, chunker=Chunker())
     workflow = IngestionWorkflow(ingestion_service=service)
     return workflow, docs, outbox
 

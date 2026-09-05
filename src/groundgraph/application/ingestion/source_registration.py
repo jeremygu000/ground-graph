@@ -30,7 +30,7 @@ class SourceRegistrationService:
             tenant_id=tenant_id,
             allowed_principals=allowed_principals,
         )
-        return await self._documents.create_source(source)
+        return await self._documents.find_or_create_source(source)
 
     async def scan_directory(
         self,

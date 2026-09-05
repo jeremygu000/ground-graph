@@ -47,11 +47,22 @@ class _FakeDocumentRepository:
     def set_checksum_override(self, document_id: Any, version_id: Any, checksum: str) -> None:
         self._checksum_override[(document_id, version_id)] = checksum
 
+    async def find_or_create_source(self, source: SourceDescriptor) -> SourceDescriptor:
+        for s in self.sources.values():
+            if (
+                s.tenant_id == source.tenant_id
+                and s.source_type == source.source_type
+                and s.uri == source.uri
+            ):
+                return s
+        self.sources[str(source.source_id)] = source
+        return source
+
     async def get_source(self, source_id: Any) -> SourceDescriptor | None:
         return self.sources.get(str(source_id))
 
-    async def find_active_document_by_source(
-        self, source_id: Any, file_path: str
+    async def find_active_document_by_canonical_locator(
+        self, source_id: Any, canonical_locator: str
     ) -> tuple[Any, Any] | None:
         return self._find_result
 
@@ -73,15 +84,37 @@ class _FakeDocumentRepository:
         self.chunks.append(chunk)
 
 
+class _FakeIngestionUoW:
+    def __init__(self, docs: _FakeDocumentRepository, outbox: _FakeOutboxRepository) -> None:
+        self.documents = docs
+        self.outbox = outbox
+        self._committed = False
+
+    async def __aenter__(self) -> Any:
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        self._committed = True
+
+    async def commit(self) -> None:
+        self._committed = True
+
+    async def rollback(self) -> None:
+        pass
+
+
 class TestIngestionService:
     def setup_method(self) -> None:
-        self.fake_docs: Any = _FakeDocumentRepository()
+        self.fake_docs = _FakeDocumentRepository()
         self.fake_store: Any = _FakeObjectStore()
-        self.fake_outbox: Any = _FakeOutboxRepository()
+        self.fake_outbox = _FakeOutboxRepository()
+
+        def uow_factory() -> Any:
+            return _FakeIngestionUoW(self.fake_docs, self.fake_outbox)
+
         self.service = IngestionService(
-            documents=self.fake_docs,
+            uow_factory=uow_factory,
             object_store=self.fake_store,
-            outbox_repo=self.fake_outbox,
             chunker=Chunker(),
         )
 
@@ -200,7 +233,7 @@ class TestIngestionService:
                 media_type="text/plain",
             )
 
-    async def test_ingest_file_idempotent_same_checksum_no_outbox(self, tmp_path: Any) -> None:
+    async def test_ingest_file_idempotent_same_checksum_no_new_version(self, tmp_path: Any) -> None:
         source_id = uuid4()
         self.fake_docs.set_source(
             SourceDescriptor(
