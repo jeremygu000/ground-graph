@@ -126,7 +126,7 @@ class MarkdownParser(BaseParser):
             if "|" in line and not line.startswith("```"):
                 sep_line = i + 1
                 if sep_line < len(lines) and re.match(r"^\|[-:| ]+\|$", lines[sep_line].strip()):
-                    end = i + 2
+                    end = sep_line + 1
                     while end < len(lines) and lines[end].strip().startswith("|"):
                         end += 1
                     results.append((i + 1, end - 1))
@@ -230,6 +230,40 @@ class HtmlParser(BaseParser):
             html,
             flags=re.DOTALL | re.IGNORECASE,
         )
+
+        def _replace_table(m: re.Match[str]) -> str:
+            inner = m.group(0)
+            rows = re.findall(r"<tr[^>]*>(.*?)</tr>", inner, re.DOTALL | re.IGNORECASE)
+            if not rows:
+                return ""
+            md_rows: list[str] = []
+            for row_html in rows:
+                cells = re.findall(
+                    r"<t[hd][^>]*>(.*?)</t[hd]>", row_html, re.DOTALL | re.IGNORECASE
+                )
+                if cells:
+                    text_cells = [re.sub(r"<[^>]+>", "", c).strip() for c in cells]
+                    md_rows.append("| " + " | ".join(text_cells) + " |")
+            if not md_rows:
+                return ""
+            col_count = md_rows[0].count("|") - 1
+            sep = "| " + " | ".join(["---"] * col_count) + " |"
+            if len(md_rows) > 1:
+                return "\n" + "\n".join([md_rows[0], sep, *md_rows[1:]]) + "\n"
+            return "\n" + md_rows[0] + "\n" + sep + "\n"
+
+        html = re.sub(
+            r"<table[^>]*>.*?</table>", _replace_table, html, flags=re.DOTALL | re.IGNORECASE
+        )
+
+        def _replace_list_item(m: re.Match[str]) -> str:
+            inner = re.sub(r"<[^>]+>", "", m.group(0)).strip()
+            return "\n- " + inner + "\n"
+
+        html = re.sub(
+            r"<li[^>]*>.*?</li>", _replace_list_item, html, flags=re.DOTALL | re.IGNORECASE
+        )
+
         text = self.STRIP_TAGS_RE.sub(" ", html)
         text = re.sub(r"\n{3,}", "\n\n", text)
         text = self.WHITESPACE_RE.sub(" ", text)
@@ -262,7 +296,7 @@ class HtmlParser(BaseParser):
             if "|" in line and not line.startswith("```"):
                 sep_line = i + 1
                 if sep_line < len(lines) and re.match(r"^\|[-:| ]+\|$", lines[sep_line].strip()):
-                    end = i + 2
+                    end = sep_line + 1
                     while end < len(lines) and lines[end].strip().startswith("|"):
                         end += 1
                     results.append((i + 1, end - 1))

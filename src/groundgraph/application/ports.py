@@ -113,6 +113,7 @@ class IngestionCheckpointRepository(Protocol):
     async def upsert_checkpoint(  # noqa: PLR0917
         self,
         source_id: UUID,
+        canonical_locator: str,
         content_checksum: str,
         status: IngestionCheckpointStatus,
         document_id: UUID | None = None,
@@ -121,7 +122,7 @@ class IngestionCheckpointRepository(Protocol):
     ) -> IngestionCheckpoint: ...
 
     async def get_checkpoint(
-        self, source_id: UUID, content_checksum: str
+        self, source_id: UUID, canonical_locator: str, content_checksum: str
     ) -> IngestionCheckpoint | None: ...
 
 

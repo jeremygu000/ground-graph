@@ -21,6 +21,7 @@ class PostgresIngestionCheckpointRepository(IngestionCheckpointRepository):
     async def upsert_checkpoint(  # noqa: PLR0917
         self,
         source_id: UUID,
+        canonical_locator: str,
         content_checksum: str,
         status: IngestionCheckpointStatus,
         document_id: UUID | None = None,
@@ -40,6 +41,7 @@ class PostgresIngestionCheckpointRepository(IngestionCheckpointRepository):
 
         values = {
             "source_id": source_id,
+            "canonical_locator": canonical_locator,
             "content_checksum": content_checksum,
             "status": status.value,
             "document_id": document_id,
@@ -54,7 +56,7 @@ class PostgresIngestionCheckpointRepository(IngestionCheckpointRepository):
             pg_insert(SqlIngestionCheckpoint)
             .values(**values)
             .on_conflict_do_update(
-                index_elements=["source_id", "content_checksum"],
+                index_elements=["source_id", "canonical_locator", "content_checksum"],
                 set_=values,
             )
             .returning(SqlIngestionCheckpoint)
@@ -64,11 +66,12 @@ class PostgresIngestionCheckpointRepository(IngestionCheckpointRepository):
         return self._to_domain(row)
 
     async def get_checkpoint(
-        self, source_id: UUID, content_checksum: str
+        self, source_id: UUID, canonical_locator: str, content_checksum: str
     ) -> IngestionCheckpoint | None:
         result = await self._session.execute(
             select(SqlIngestionCheckpoint).where(
                 SqlIngestionCheckpoint.source_id == source_id,
+                SqlIngestionCheckpoint.canonical_locator == canonical_locator,
                 SqlIngestionCheckpoint.content_checksum == content_checksum,
             )
         )
@@ -79,6 +82,7 @@ class PostgresIngestionCheckpointRepository(IngestionCheckpointRepository):
         return IngestionCheckpoint(
             checkpoint_id=row.checkpoint_id,
             source_id=row.source_id,
+            canonical_locator=row.canonical_locator,
             content_checksum=row.content_checksum,
             status=IngestionCheckpointStatus(row.status),
             document_id=row.document_id,

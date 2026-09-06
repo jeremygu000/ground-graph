@@ -102,11 +102,12 @@ class _FakeDocumentRepository:
 
 class _FakeIngestionCheckpointRepository:
     def __init__(self) -> None:
-        self._checkpoints: dict[tuple[str, str], IngestionCheckpoint] = {}
+        self._checkpoints: dict[tuple[str, str, str], IngestionCheckpoint] = {}
 
     async def upsert_checkpoint(  # noqa: PLR0917
         self,
         source_id: Any,
+        canonical_locator: str,
         content_checksum: str,
         status: IngestionCheckpointStatus,
         document_id: Any | None = None,
@@ -114,10 +115,11 @@ class _FakeIngestionCheckpointRepository:
         error_message: str | None = None,
     ) -> IngestionCheckpoint:
         now = datetime.now(UTC)
-        key = (str(source_id), content_checksum)
+        key = (str(source_id), canonical_locator, content_checksum)
         self._checkpoints[key] = IngestionCheckpoint(
             checkpoint_id=uuid4(),
             source_id=source_id,
+            canonical_locator=canonical_locator,
             content_checksum=content_checksum,
             status=status,
             document_id=document_id,
@@ -132,9 +134,9 @@ class _FakeIngestionCheckpointRepository:
         return self._checkpoints[key]
 
     async def get_checkpoint(
-        self, source_id: Any, content_checksum: str
+        self, source_id: Any, canonical_locator: str, content_checksum: str
     ) -> IngestionCheckpoint | None:
-        return self._checkpoints.get((str(source_id), content_checksum))
+        return self._checkpoints.get((str(source_id), canonical_locator, content_checksum))
 
 
 class _FakeIngestionUoW:

@@ -681,6 +681,7 @@ class IngestionCheckpoint(Base):
     source_id: Mapped[UUID] = mapped_column(
         PG_UUID, ForeignKey("sources.source_id", ondelete="CASCADE"), nullable=False
     )
+    canonical_locator: Mapped[str] = mapped_column(Text, nullable=False)
     content_checksum: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(50), nullable=False)
     document_id: Mapped[UUID | None] = mapped_column(PG_UUID, nullable=True)
@@ -697,8 +698,9 @@ class IngestionCheckpoint(Base):
     __table_args__ = (
         UniqueConstraint(
             "source_id",
+            "canonical_locator",
             "content_checksum",
-            name="uq_ingestion_checkpoints_source_checksum",
+            name="uq_ingestion_checkpoints_source_locator_checksum",
         ),
         Index("ix_ingestion_checkpoints_source_id", "source_id"),
         Index("ix_ingestion_checkpoints_status", "status"),

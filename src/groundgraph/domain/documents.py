@@ -77,13 +77,16 @@ class IngestionCheckpoint(BaseModel):
     """Durable checkpoint tracking ingestion progress for resumable ingestion.
 
     Enables "failure resumes without duplicating completed data" (plan.md §6.3).
-    Key is (source_id, content_checksum) — one checkpoint per source+content.
+    Key is (source_id, canonical_locator, content_checksum) — one checkpoint
+    per source+file+content combination, correctly handling same-content
+    files at different paths and content reverts to historical versions.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     checkpoint_id: UUID
     source_id: UUID
+    canonical_locator: str
     content_checksum: str
     status: IngestionCheckpointStatus
     document_id: UUID | None = None

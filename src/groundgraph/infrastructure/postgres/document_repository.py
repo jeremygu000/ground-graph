@@ -144,7 +144,20 @@ class PostgresDocumentRepository(DocumentRepository):
         )
         self._session.add(version)
         await self._session.flush()
-        return (document, is_new)
+
+        canonical = ParsedDocument(
+            document_id=document_id,
+            version_id=document.version_id,
+            source_id=document.source_id,
+            source_locator=document.source_locator,
+            title=document.title,
+            media_type=document.media_type,
+            checksum=document.checksum,
+            content=document.content,
+            metadata=document.metadata,
+            effective_at=document.effective_at,
+        )
+        return (canonical, is_new)
 
     async def create_document(self, document: ParsedDocument) -> ParsedDocument:
         doc, _ = await self.upsert_document(document)

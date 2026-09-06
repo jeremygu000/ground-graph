@@ -113,12 +113,14 @@ class Chunker:
         if self._estimate_tokens(text) <= max_tokens:
             return [(text.strip(), section_start, self._last_line_of(text, section_start))]
 
+        text_len = len(text)
         line_to_char = self._build_line_to_char_map(text)
-        protected = self._build_protected_ranges_char(content, section_start, line_to_char)
+        protected = self._build_protected_ranges_char(
+            content, section_start, line_to_char, text_len
+        )
 
         chunks: list[tuple[str, int, int]] = []
         start = 0
-        text_len = len(text)
 
         while start < text_len:
             target = min(start + estimated_chars, text_len)
@@ -135,8 +137,18 @@ class Chunker:
                 start = min(start + 1, text_len)
                 continue
 
+            end_aligned = end
+            if end_aligned < text_len and text[end_aligned - 1] != "\n":
+                nl_pos = text.find("\n", start, end)
+                if nl_pos >= 0:
+                    end_aligned = nl_pos + 1
+
             chunk_start_line = section_start + text[:start].count("\n")
-            chunk_end_line = section_start + text[:end].count("\n") - 1
+            chunk_end_line = (
+                section_start + text[:end_aligned].count("\n")
+                if end_aligned < text_len
+                else section_start + text.count("\n")
+            )
             chunks.append((chunk_text, chunk_start_line, chunk_end_line))
 
             if end >= text_len:
@@ -165,6 +177,7 @@ class Chunker:
         content: ParsedContent,
         section_start: int,
         line_to_char: dict[int, int],
+        text_length: int,
     ) -> list[tuple[int, int]]:
         ranges: list[tuple[int, int]] = []
         section_rel_start = 1
@@ -177,7 +190,7 @@ class Chunker:
                     rel_start = item_start - section_start + 1
                     rel_end = item_end - section_start + 1
                     char_start = line_to_char.get(rel_start, 0)
-                    char_end = line_to_char.get(rel_end, 0)
+                    char_end = line_to_char.get(rel_end + 1, text_length)
                     if char_start < char_end:
                         ranges.append((char_start, char_end))
 
@@ -197,7 +210,7 @@ class Chunker:
             if p_start > chunk_start and p_start < target:
                 return p_start
             if p_start <= chunk_start <= p_end and p_end > target:
-                return None
+                return p_end
             if p_start < target <= p_end:
                 return p_start
         return None

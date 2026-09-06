@@ -56,7 +56,9 @@ class IngestionService:
             await self._object_store.put_raw(raw_key, raw_bytes, media_type)
 
         async with self._uow_factory() as uow:
-            checkpoint = await uow.ingestion_checkpoint.get_checkpoint(source_id, checksum)
+            checkpoint = await uow.ingestion_checkpoint.get_checkpoint(
+                source_id, canonical_locator, checksum
+            )
             if checkpoint is not None and checkpoint.status == IngestionCheckpointStatus.PERSISTED:
                 assert checkpoint.document_id is not None
                 assert checkpoint.version_id is not None
@@ -84,6 +86,7 @@ class IngestionService:
                     )
                     await uow.ingestion_checkpoint.upsert_checkpoint(
                         source_id=source_id,
+                        canonical_locator=canonical_locator,
                         content_checksum=checksum,
                         status=IngestionCheckpointStatus.PERSISTED,
                         document_id=doc_id,
@@ -96,6 +99,7 @@ class IngestionService:
 
             await uow.ingestion_checkpoint.upsert_checkpoint(
                 source_id=source_id,
+                canonical_locator=canonical_locator,
                 content_checksum=checksum,
                 status=IngestionCheckpointStatus.PERSISTED,
                 document_id=document_id,
@@ -120,12 +124,14 @@ class IngestionService:
                 },
                 effective_at=datetime.now(UTC),
             )
-            _, _ = await uow.documents.upsert_document(document)
+            canonical_doc, _ = await uow.documents.upsert_document(document)
+            canonical_doc_id = canonical_doc.document_id
+            canonical_version_id = canonical_doc.version_id
 
             chunks = self._chunker.chunk(
                 content=parsed,
-                document_id=document_id,
-                version_id=version_id,
+                document_id=canonical_doc_id,
+                version_id=canonical_version_id,
                 allowed_principals=source.allowed_principals,
             )
             for chunk in chunks:
@@ -134,11 +140,11 @@ class IngestionService:
             event = OutboxEvent(
                 event_id=uuid4(),
                 aggregate_type="document",
-                aggregate_id=document_id,
+                aggregate_id=canonical_doc_id,
                 event_type=OutboxEventType.DOCUMENT_PARSED,
                 payload={
-                    "document_id": str(document_id),
-                    "version_id": str(version_id),
+                    "document_id": str(canonical_doc_id),
+                    "version_id": str(canonical_version_id),
                     "source_id": str(source_id),
                     "tenant_id": source.tenant_id,
                 },
@@ -146,12 +152,12 @@ class IngestionService:
             )
             await uow.outbox.add(event)
 
-        return IngestionResult(
-            document_id=document_id,
-            version_id=version_id,
-            created_new_version=True,
-            tenant_id=source.tenant_id,
-        )
+            return IngestionResult(
+                document_id=canonical_doc.document_id,
+                version_id=canonical_doc.version_id,
+                created_new_version=True,
+                tenant_id=source.tenant_id,
+            )
 
     MAX_FILE_SIZE = 100 * 1024 * 1024
 

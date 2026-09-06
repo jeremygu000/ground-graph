@@ -8,6 +8,11 @@ Adds ingestion_checkpoints table to track durable ingestion state,
 enabling resume without duplicating completed work after mid-ingestion
 failure (plan.md §6.3: "Failed ingestion can resume from the last
 durable completed step").
+
+Checkpoint identity is (source_id, canonical_locator, content_checksum)
+to correctly handle:
+- Same source, different files with same content → different checkpoints
+- Same source, same file content revert to historical version → re-checked
 """
 
 from __future__ import annotations
@@ -30,6 +35,7 @@ def upgrade() -> None:
             "checkpoint_id", sa.UUID(), nullable=False, server_default=sa.text("gen_random_uuid()")
         ),
         sa.Column("source_id", sa.UUID(), nullable=False),
+        sa.Column("canonical_locator", sa.Text(), nullable=False),
         sa.Column("content_checksum", sa.Text(), nullable=False),
         sa.Column("status", sa.String(50), nullable=False),
         sa.Column("document_id", sa.UUID(), nullable=True),
@@ -50,7 +56,10 @@ def upgrade() -> None:
         sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
         sa.PrimaryKeyConstraint("checkpoint_id"),
         sa.UniqueConstraint(
-            "source_id", "content_checksum", name="uq_ingestion_checkpoints_source_checksum"
+            "source_id",
+            "canonical_locator",
+            "content_checksum",
+            name="uq_ingestion_checkpoints_source_locator_checksum",
         ),
         sa.ForeignKeyConstraint(["source_id"], ["sources.source_id"], ondelete="CASCADE"),
     )
