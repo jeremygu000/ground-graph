@@ -176,11 +176,11 @@ class HtmlParser(BaseParser):
     def parse(self, content: bytes) -> ParsedContent:
         text = content.decode("utf-8", errors="replace")
         title = self._extract_title(text)
-        body = self._strip_tags(text)
-        headings = self._extract_headings(text)
-        code_blocks = self._extract_code_blocks(text)
-        tables = self._extract_tables(text)
-        list_items = self._extract_list_items(text)
+        body = self._normalize_to_markdown(text)
+        headings = self._extract_headings(body)
+        code_blocks = self._extract_code_blocks(body)
+        tables = self._extract_tables(body)
+        list_items = self._extract_list_items(body)
         return ParsedContent(
             title=title or "untitled",
             body=body,
@@ -202,29 +202,55 @@ class HtmlParser(BaseParser):
     STRIP_TAGS_RE = re.compile(r"<[^>]+>")
     WHITESPACE_RE = re.compile(r"[ \t]+")
 
-    def _strip_tags(self, html: str) -> str:
+    def _normalize_to_markdown(self, html: str) -> str:
+        def _inner_text(tag: str) -> str:
+            return re.sub(r"<[^>]+>", "", tag).strip()
+
+        def _replace_heading(m: re.Match[str]) -> str:
+            level = int(m.group(1))
+            inner = m.group(2)
+            text = re.sub(r"<[^>]+>", "", inner).strip()
+            return "\n" + "#" * level + " " + text + "\n"
+
+        html = re.sub(
+            r"<h([1-6])(?:\s[^>]*)?>(.*?)</h\1>",
+            _replace_heading,
+            html,
+            flags=re.DOTALL | re.IGNORECASE,
+        )
+        html = re.sub(
+            r"<pre><code([^>]*)>(.*?)</code></pre>",
+            lambda m: f"\n```\n{_inner_text(m.group(2))}\n```\n",
+            html,
+            flags=re.DOTALL | re.IGNORECASE,
+        )
+        html = re.sub(
+            r"<code([^>]*)>(.*?)</code>",
+            lambda m: f"`{_inner_text(m.group(2))}`",
+            html,
+            flags=re.DOTALL | re.IGNORECASE,
+        )
         text = self.STRIP_TAGS_RE.sub(" ", html)
         text = re.sub(r"\n{3,}", "\n\n", text)
         text = self.WHITESPACE_RE.sub(" ", text)
         return text.strip()
 
-    def _extract_headings(self, html: str) -> list[tuple[int, str]]:
+    def _extract_headings(self, body: str) -> list[tuple[int, str]]:
         results: list[tuple[int, str]] = []
-        for m in re.finditer(r"<h([1-6])[^>]*>(.+?)</h\1>", html, re.IGNORECASE | re.DOTALL):
-            level = int(m.group(1))
-            text = re.sub(r"<[^>]+>", "", m.group(2)).strip()
-            results.append((level, text))
+        for m in re.finditer(r"^(#{1,6})\s+(.+)$", body, re.MULTILINE):
+            level = len(m.group(1))
+            results.append((level, m.group(2).strip()))
         return results
 
-    def _extract_code_blocks(self, html: str) -> list[tuple[int, int]]:
+    def _extract_code_blocks(self, body: str) -> list[tuple[int, int]]:
         results: list[tuple[int, int]] = []
-        pattern = re.compile(
-            r"<pre[^>]*>.*?</pre>|<code[^>]*>.*?</code>", re.DOTALL | re.IGNORECASE
-        )
-        for m in pattern.finditer(html):
-            start = html.count("\n", 0, m.start()) + 1
-            end = html.count("\n", 0, m.end())
-            results.append((start, end))
+        pattern = re.compile(r"^```", re.MULTILINE)
+        starts: list[int] = []
+        for m in pattern.finditer(body):
+            line_no = body.count("\n", 0, m.start()) + 1
+            starts.append(line_no)
+        for i in range(0, len(starts) - 1, 2):
+            results.append((starts[i], starts[i + 1]))
         return results
 
     def _extract_tables(self, html: str) -> list[tuple[int, int]]:
