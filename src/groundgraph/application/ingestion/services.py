@@ -6,7 +6,7 @@ import asyncio
 import hashlib
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -33,6 +33,38 @@ class IngestionResult:
     version_id: UUID
     created_new_version: bool
     tenant_id: str
+
+
+@dataclass(frozen=True)
+class IngestionReport:
+    """Quality report for a single ingestion run (plan.md §6.6)."""
+
+    source_id: UUID
+    document_id: UUID
+    version_id: UUID
+    media_type: str
+    parse_success: bool
+    parse_error: str | None = None
+    source_size_bytes: int = 0
+    extracted_size_bytes: int = 0
+    chunk_count: int = 0
+    empty_chunk_count: int = 0
+    duplicate_chunk_count: int = 0
+    missing_acl_count: int = 0
+    duration_ms: float = 0.0
+    timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+    @property
+    def extracted_vs_source_ratio(self) -> float:
+        if self.source_size_bytes == 0:
+            return 0.0
+        return round(self.extracted_size_bytes / self.source_size_bytes, 3)
+
+    @property
+    def empty_chunk_rate(self) -> float:
+        if self.chunk_count == 0:
+            return 0.0
+        return round(self.empty_chunk_count / self.chunk_count, 3)
 
 
 class IngestionService:
@@ -261,3 +293,53 @@ class IngestionService:
     @staticmethod
     def _sha256(data: bytes) -> str:
         return hashlib.sha256(data).hexdigest()
+
+    async def generate_report(
+        self,
+        source_id: UUID,
+        result: IngestionResult,
+        source_size_bytes: int,
+        duration_ms: float,
+        parse_error: str | None = None,
+    ) -> IngestionReport:
+        """Generate an ingestion quality report (plan.md §6.6).
+
+        This is called after ingest_file() to gather quality metrics
+        from the chunks that were created.
+        """
+        async with self._uow_factory() as uow:
+            chunks = await uow.documents.list_chunks(result.document_id, result.version_id)
+
+        chunk_checksums: set[str] = set()
+        empty_count = 0
+        duplicate_count = 0
+        missing_acl = 0
+
+        for chunk in chunks:
+            if not chunk.content.strip():
+                empty_count += 1
+            checksum = chunk.checksum
+            if checksum in chunk_checksums:
+                duplicate_count += 1
+            else:
+                chunk_checksums.add(checksum)
+            if not chunk.allowed_principals:
+                missing_acl += 1
+
+        total_extracted = sum(len(c.content) for c in chunks)
+
+        return IngestionReport(
+            source_id=source_id,
+            document_id=result.document_id,
+            version_id=result.version_id,
+            media_type="",  # not tracked at this level
+            parse_success=parse_error is None,
+            parse_error=parse_error,
+            source_size_bytes=source_size_bytes,
+            extracted_size_bytes=total_extracted,
+            chunk_count=len(chunks),
+            empty_chunk_count=empty_count,
+            duplicate_chunk_count=duplicate_count,
+            missing_acl_count=missing_acl,
+            duration_ms=duration_ms,
+        )
