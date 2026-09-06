@@ -86,6 +86,7 @@ class KnowledgeFact(BaseModel):
     observed_at: datetime
     extraction_method: Literal["structured", "rule", "llm", "human"]
     ontology_version: str
+    allowed_principals: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _validate_temporal_consistency(self) -> KnowledgeFact:

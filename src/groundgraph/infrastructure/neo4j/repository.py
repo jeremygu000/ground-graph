@@ -45,7 +45,8 @@ SET f.subject_id = $subject_id,
     f.valid_to = $valid_to,
     f.observed_at = $observed_at,
     f.extraction_method = $extraction_method,
-    f.ontology_version = $ontology_version
+    f.ontology_version = $ontology_version,
+    f.allowed_principals = $allowed_principals
 WITH f
 MATCH (s:Entity {entity_id: $subject_id})
 MERGE (s)-[r:SUBJECT_OF]->(f)
@@ -121,6 +122,7 @@ def _dict_to_fact(node: dict[str, Any]) -> KnowledgeFact:
         observed_at=_neo4j_datetime_to_native(node["observed_at"]),
         extraction_method=node["extraction_method"],
         ontology_version=node["ontology_version"],
+        allowed_principals=node.get("allowed_principals", []),
     )
 
 
@@ -217,6 +219,7 @@ class Neo4jGraphRepository:
             "observed_at": fact.observed_at,
             "extraction_method": fact.extraction_method,
             "ontology_version": fact.ontology_version,
+            "allowed_principals": fact.allowed_principals,
         }
         await self._run_write(_FACT_MERGE, **params)
         return fact
@@ -234,6 +237,7 @@ class Neo4jGraphRepository:
         predicate: str | None = None,
         object_id: UUID | None = None,
         status: str | None = None,
+        allowed_principals: list[str] | None = None,
     ) -> list[KnowledgeFact]:
         conditions: list[str] = []
         params: dict[str, Any] = {}
@@ -249,6 +253,11 @@ class Neo4jGraphRepository:
         if status:
             conditions.append("f.status = $status")
             params["status"] = status
+        if allowed_principals is not None:
+            conditions.append(
+                "any(p IN $allowed_principals "
+                "WHERE p IN f.allowed_principals OR size(f.allowed_principals) = 0)"
+            )
 
         where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
         cypher = f"""
@@ -257,7 +266,9 @@ class Neo4jGraphRepository:
         RETURN f
         LIMIT 100
         """
-        records = await self._run_read_data(cypher, **params)
+        records = await self._run_read_data(
+            cypher, allowed_principals=allowed_principals or [], **params
+        )
         return [_dict_to_fact(r["f"]) for r in records]
 
     async def update_fact_status(

@@ -11,6 +11,7 @@ import pytest
 from groundgraph.domain.evidence import OutboxEvent, OutboxEventStatus, OutboxEventType
 from groundgraph.infrastructure.neo4j.repository import Neo4jGraphRepository
 from groundgraph.infrastructure.postgres.outbox_graph_projector import (
+    WORKER_ID,
     OutboxGraphProjector,
     OutboxGraphWorker,
 )
@@ -36,6 +37,7 @@ def _make_event(
     event_type: OutboxEventType,
     payload: dict[str, Any],
     event_id: UUID | None = None,
+    claim_token: str | None = None,
 ) -> OutboxEvent:
     return OutboxEvent(
         event_id=event_id or uuid4(),
@@ -43,9 +45,10 @@ def _make_event(
         aggregate_id=uuid4(),
         event_type=event_type,
         payload=payload,
-        status=OutboxEventStatus.PENDING,
+        status=OutboxEventStatus.CLAIMED,
         attempts=0,
         created_at=datetime.now(UTC),
+        claim_token=claim_token or uuid4().hex,
     )
 
 
@@ -182,3 +185,8 @@ def test_worker_stop() -> None:
     assert worker._running is False
     worker.stop()
     assert worker._running is False
+
+
+def test_worker_id_constant() -> None:
+    """Worker uses a stable worker_id constant for lease tracking."""
+    assert WORKER_ID == "graph-projector"

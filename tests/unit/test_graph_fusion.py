@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from uuid import uuid4
@@ -265,19 +265,40 @@ class _FactWithMeta:
     observed_at: datetime | None = None
     valid_from: datetime | None = None
     valid_to: datetime | None = None
+    allowed_principals: list[str] = field(default_factory=list)
+    evidence_ids: list[Any] = field(default_factory=list)
 
 
 class _RepoWithFacts:
-    async def find_facts(self, subject_id=None, object_id=None, predicate=None, status=None):
+    async def find_facts(
+        self, subject_id=None, object_id=None, predicate=None, status=None, allowed_principals=None
+    ):
         return []
+
+    async def get_entity(self, entity_id: Any) -> CanonicalEntity | None:
+        return None
 
 
 class _RepoReturnsFacts(_RepoWithFacts):
-    def __init__(self, facts: list[Any]) -> None:
+    def __init__(self, facts: list[Any], entities: dict[Any, str] | None = None) -> None:
         self._facts = facts
+        self._entities = entities or {}
 
-    async def find_facts(self, subject_id=None, object_id=None, predicate=None, status=None):
+    async def find_facts(
+        self, subject_id=None, object_id=None, predicate=None, status=None, allowed_principals=None
+    ):
         return self._facts
+
+    async def get_entity(self, entity_id: Any) -> CanonicalEntity | None:
+        name = self._entities.get(entity_id)
+        if name is None:
+            return None
+        return CanonicalEntity(
+            entity_id=entity_id,
+            entity_type="Service",
+            canonical_name=name,
+            aliases=[name],
+        )
 
 
 @pytest.mark.asyncio
@@ -368,4 +389,4 @@ async def test_hybrid_rrf_fusion_staleness_penalty_reduces_score() -> None:
     result = await svc.retrieve_evidence([entity], max_depth=1)
     assert len(result) == 1
     content_str = result[0].content
-    assert "depends_on:" in content_str
+    assert "depends_on" in content_str

@@ -111,7 +111,7 @@ class HybridRetrievalService:
         graph_evidence: list[Evidence] = []
 
         if plan.strategy in ("graph", "hybrid") and plan.entities:
-            graph_evidence = await self._retrieve_graph_evidence(plan, principal)
+            graph_evidence = await self._retrieve_graph_evidence(plan, principal, tenant_id)
 
         if plan.strategy == "hybrid":
             fused = self._hybrid_fuse(vector_results, keyword_results, graph_evidence)
@@ -144,7 +144,9 @@ class HybridRetrievalService:
 
         return await self._answer_generator.generate(question, reranked, plan)
 
-    async def _retrieve_graph_evidence(self, plan: RetrievalPlan, principal: str) -> list[Evidence]:
+    async def _retrieve_graph_evidence(
+        self, plan: RetrievalPlan, principal: str, tenant_id: str
+    ) -> list[Evidence]:
         graph_fusion_svc = GraphFusionService(graph_repository=self._graph_repo)
         entities = await self._resolve_entities(plan)
         return await graph_fusion_svc.retrieve_evidence(
@@ -152,6 +154,8 @@ class HybridRetrievalService:
             predicates=plan.predicates,
             valid_at=plan.valid_at,
             max_depth=plan.max_graph_depth,
+            tenant_id=tenant_id,
+            principal=principal,
         )
 
     async def _resolve_entities(self, plan: RetrievalPlan) -> list[CanonicalEntity]:
@@ -234,7 +238,7 @@ class HybridRetrievalService:
         graph_evidence: list[Evidence] = []
 
         if plan.strategy in ("graph", "hybrid") and plan.entities:
-            graph_evidence = await self._retrieve_graph_evidence(plan, principal)
+            graph_evidence = await self._retrieve_graph_evidence(plan, principal, tenant_id)
 
         if plan.strategy == "hybrid":
             fused = self._hybrid_fuse(vector_results, keyword_results, graph_evidence)

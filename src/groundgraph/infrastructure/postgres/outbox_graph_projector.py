@@ -8,13 +8,16 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
-from groundgraph.application.ports import OutboxConsumer
+from groundgraph.application.ports import OutboxRepository
 from groundgraph.domain.evidence import OutboxEvent, OutboxEventType
 from groundgraph.domain.knowledge import CanonicalEntity, EntityMention, KnowledgeFact
 from groundgraph.infrastructure.neo4j.repository import Neo4jGraphRepository
 from groundgraph.infrastructure.neo4j.unit_of_work import Neo4jUnitOfWork
 
 logger = logging.getLogger(__name__)
+
+WORKER_ID = "graph-projector"
+LEASE_DURATION_SECONDS = 30
 
 
 class OutboxGraphProjector:
@@ -88,12 +91,17 @@ class OutboxGraphProjector:
             observed_at=payload.get("observed_at") or datetime.now(UTC),
             extraction_method=payload.get("extraction_method", "llm"),
             ontology_version=payload.get("ontology_version", "v0.1.0"),
+            allowed_principals=payload.get("allowed_principals", []),
         )
         await self._graph.create_fact(fact)
 
 
 class OutboxGraphWorker:
-    """Background worker that polls the Postgres outbox via claim_batch and projects to Neo4j."""
+    """Background worker that polls the Postgres outbox via OutboxRepository and projects to Neo4j.
+
+    Uses the full OutboxRepository contract with worker_id + lease + claim_token
+    for stale-worker protection (see OutboxRepository port, plan.md §2.2).
+    """
 
     def __init__(
         self,
@@ -106,17 +114,21 @@ class OutboxGraphWorker:
 
     async def start(
         self,
-        consumer: OutboxConsumer,
+        outbox_repo: OutboxRepository,
         uow_factory: Callable[[], Neo4jUnitOfWork],
     ) -> None:
         """Start the worker loop using claim_batch / mark_completed / mark_failed."""
         self._running = True
         while self._running:
             try:
-                events = await consumer.claim_batch(batch_size=100)
+                events = await outbox_repo.claim_batch(
+                    batch_size=100,
+                    worker_id=WORKER_ID,
+                    lease_duration_seconds=LEASE_DURATION_SECONDS,
+                )
                 if events:
                     for event in events:
-                        await self._process_event(consumer, event, uow_factory)
+                        await self._process_event(outbox_repo, event, uow_factory)
                 await asyncio.sleep(self._poll_interval)
             except Exception:
                 logger.exception("Worker error")
@@ -124,7 +136,7 @@ class OutboxGraphWorker:
 
     async def _process_event(
         self,
-        consumer: OutboxConsumer,
+        outbox_repo: OutboxRepository,
         event: OutboxEvent,
         uow_factory: Callable[[], Neo4jUnitOfWork],
     ) -> None:
@@ -134,10 +146,10 @@ class OutboxGraphWorker:
                 assert uow.graph is not None, "Neo4jUnitOfWork.graph must not be None"
                 projector = OutboxGraphProjector(uow.graph)
                 await projector.project_event(event)
-            await consumer.mark_completed(event.event_id)
+            await outbox_repo.mark_completed(event.event_id, event.claim_token)  # type: ignore[arg-type]
         except Exception as exc:
             logger.warning("Failed to project event %s: %s", event.event_id, exc)
-            await consumer.mark_failed(event.event_id, str(exc))
+            await outbox_repo.mark_failed(event.event_id, event.claim_token, str(exc))  # type: ignore[arg-type]
 
     def stop(self) -> None:
         """Stop the worker loop."""

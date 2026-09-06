@@ -1,76 +1,112 @@
-"""Graph-augmented fusion combining vector, keyword, and graph evidence.
+"""Graph traversal and evidence fusion for the retrieval layer.
 
-Reciprocal Rank Fusion is extended to handle three streams:
-  1. vector search (high recall, low precision)
-  2. keyword search (exact matches)
-  3. graph traversal (relationship/multi-hop)
-
-Score normalization uses min-max normalization across streams.
-Graph evidence is weighted by path depth (shorter paths = higher weight).
-Staleness penalty reduces weight for older facts.
-Source diversity budget ensures we don't over-rely on one document.
+Application-layer service.  Depends only on application ports; the
+infrastructure layer provides concrete GraphRepository implementations.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, TypedDict
 from uuid import UUID, uuid4
 
-from groundgraph.application.ports import GraphRepository, RetrievedChunk
+from groundgraph.application.retrieval.fusion import RRF_K
 from groundgraph.domain.knowledge import CanonicalEntity
 from groundgraph.domain.retrieval import Evidence
 
-RRF_K = 60
-GRAPH_WEIGHT = 1.5
-DEPTH_PENALTY = 0.2
-STALENESS_HALF_LIFE_DAYS = 90
+if TYPE_CHECKING:
+    from groundgraph.application.ports import GraphRepository
+
+
 GRAPH_TRAVERSAL_MAX_FACTS = 50
+DEPTH_PENALTY = 0.1
+STALENESS_HALF_LIFE_DAYS = 30
+GRAPH_WEIGHT = 1.5
 
 
-@dataclass
-class GraphFusionConfig:
-    graph_repository: GraphRepository
-    max_depth: int = 2
+class _FactWithNames(TypedDict):
+    fact: Any
+    depth: int
+    subject_name: str
+    object_name: str
 
 
 class GraphFusionService:
+    """Service for traversing the knowledge graph and retrieving graph-structured evidence.
+
+    Graph traversal respects:
+      - status = "verified" filter
+      - temporal validity (valid_from / valid_to) against query valid_at
+      - ACL via allowed_principals filter on facts
+    """
+
     def __init__(self, graph_repository: GraphRepository) -> None:
         self._repo = graph_repository
 
-    async def retrieve_evidence(
+    async def retrieve_evidence(  # noqa: PLR0917
         self,
         seed_entities: list[CanonicalEntity],
         predicates: list[str] | None = None,
         valid_at: datetime | None = None,
         max_depth: int = 2,
+        tenant_id: str | None = None,
+        principal: str | None = None,
     ) -> list[Evidence]:
+        """Retrieve graph evidence traversing from seed entities.
+
+        Args:
+            seed_entities: starting entities for graph traversal
+            predicates: optional list of predicates to filter edges
+            valid_at: temporal point-in-time for temporal validity filtering
+            max_depth: maximum traversal depth
+            tenant_id: tenant identifier for ACL enforcement
+            principal: requesting principal for ACL enforcement
+
+        Returns:
+            list of Evidence objects with hydrated content (subject predicate object)
+        """
         if not seed_entities:
             return []
 
         results: list[Evidence] = []
         seen_ids: set[UUID] = set()
+        allowed_principals = [principal] if principal else None
 
         for entity in seed_entities:
-            facts = await self._traverse(entity.entity_id, predicates, valid_at, max_depth)
-            for fact, path_len in facts:
+            facts = await self._traverse(
+                entity.entity_id,
+                predicates,
+                valid_at,
+                max_depth,
+                allowed_principals,
+            )
+            for entry in facts:
+                fact = entry["fact"]
+                path_len = entry["depth"]
+                subject_name = entry["subject_name"]
+                obj_name = entry["object_name"]
                 if fact.fact_id in seen_ids:
                     continue
                 seen_ids.add(fact.fact_id)
                 depth_score = max(0.0, 1.0 - (path_len - 1) * DEPTH_PENALTY)
                 staleness_score = self._staleness_score(fact.observed_at)
                 final_score = depth_score * staleness_score
+                content = (
+                    f"{subject_name} {fact.predicate} {obj_name} (confidence: {final_score:.2f})"
+                )
+                source_id = fact.evidence_ids[0] if fact.evidence_ids else fact.fact_id
                 results.append(
                     Evidence(
                         evidence_id=fact.fact_id,
-                        source_id=entity.entity_id,
-                        content=f"{fact.predicate}: {final_score:.2f}",
+                        source_id=source_id,
+                        content=content,
                         retrieval_method="graph",
+                        vector_score=None,
+                        rerank_score=None,
                         graph_path_fact_ids=[fact.fact_id],
                         valid_from=fact.valid_from,
                         valid_to=fact.valid_to,
-                        allowed_principals=[],
+                        allowed_principals=fact.allowed_principals,
                     )
                 )
 
@@ -82,8 +118,9 @@ class GraphFusionService:
         predicates: list[str] | None,
         valid_at: datetime | None,
         max_depth: int,
-    ) -> list[tuple[Any, int]]:
-        results: list[tuple[Any, int]] = []
+        allowed_principals: list[str] | None,
+    ) -> list[_FactWithNames]:
+        results: list[_FactWithNames] = []
         seen: set[UUID] = set()
         queue: list[tuple[UUID, int]] = [(seed_id, 1)]
 
@@ -92,30 +129,55 @@ class GraphFusionService:
             if depth > max_depth:
                 continue
 
+            current_entity = await self._repo.get_entity(current_id)
+            current_name = current_entity.canonical_name if current_entity else str(current_id)
+
             facts = await self._repo.find_facts(
                 subject_id=current_id,
                 predicate=predicates[0] if predicates else None,
                 status="verified",
+                allowed_principals=allowed_principals,
             )
             for fact in facts:
                 if fact.fact_id in seen:
                     continue
+                if not self._is_temporal_valid(fact, valid_at):
+                    continue
                 seen.add(fact.fact_id)
-                if self._is_temporal_valid(fact, valid_at):
-                    results.append((fact, depth))
+                obj_entity = await self._repo.get_entity(fact.object_id)
+                obj_name = obj_entity.canonical_name if obj_entity else str(fact.object_id)
+                results.append(
+                    {
+                        "fact": fact,
+                        "depth": depth,
+                        "subject_name": current_name,
+                        "object_name": obj_name,
+                    }
+                )
                 queue.append((fact.object_id, depth + 1))
 
             facts_as_obj = await self._repo.find_facts(
                 object_id=current_id,
                 predicate=predicates[0] if predicates else None,
                 status="verified",
+                allowed_principals=allowed_principals,
             )
             for fact in facts_as_obj:
                 if fact.fact_id in seen:
                     continue
+                if not self._is_temporal_valid(fact, valid_at):
+                    continue
                 seen.add(fact.fact_id)
-                if self._is_temporal_valid(fact, valid_at):
-                    results.append((fact, depth))
+                subj_entity = await self._repo.get_entity(fact.subject_id)
+                subj_name = subj_entity.canonical_name if subj_entity else str(fact.subject_id)
+                results.append(
+                    {
+                        "fact": fact,
+                        "depth": depth,
+                        "subject_name": subj_name,
+                        "object_name": current_name,
+                    }
+                )
                 queue.append((fact.subject_id, depth + 1))
 
         return results
@@ -169,8 +231,8 @@ def _determine_retrieval_method(s: dict[str, Any]) -> Literal["graph", "vector",
 
 
 def hybrid_rrf_fusion(
-    vector_results: list[RetrievedChunk],
-    keyword_results: list[RetrievedChunk],
+    vector_results: list[Any],
+    keyword_results: list[Any],
     graph_evidence: list[Evidence],
 ) -> list[Evidence]:
     """Combine vector, keyword, and graph evidence using extended RRF.
