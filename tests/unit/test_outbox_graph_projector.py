@@ -192,3 +192,170 @@ def test_worker_stop() -> None:
 def test_worker_id_constant() -> None:
     """Worker uses a stable worker_id constant for lease tracking."""
     assert WORKER_ID == "graph-projector"
+
+
+class _FakePostgresOutboxRepo:
+    def __init__(self) -> None:
+        self.claimed_events: list[OutboxEvent] = []
+        self.completed_ids: list[UUID] = []
+        self.failed_ids: list[tuple[UUID, str]] = []
+        self._batch: list[OutboxEvent] = []
+
+    async def claim_batch(
+        self, batch_size: int, worker_id: str, lease_duration_seconds: int
+    ) -> list[OutboxEvent]:
+        events, self._batch = self._batch[:batch_size], self._batch[batch_size:]
+        self.claimed_events.extend(events)
+        return events
+
+    async def mark_completed(self, event_id: UUID, claim_token: str) -> None:
+        self.completed_ids.append(event_id)
+
+    async def mark_failed(self, event_id: UUID, claim_token: str, error: str) -> None:
+        self.failed_ids.append((event_id, error))
+
+
+class _FakePostgresUnitOfWork:
+    def __init__(self, outbox_repo: _FakePostgresOutboxRepo) -> None:
+        self.outbox: _FakePostgresOutboxRepo | None = outbox_repo
+        self._committed = False
+
+    async def __aenter__(self) -> _FakePostgresUnitOfWork:
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        pass
+
+    async def commit(self) -> None:
+        self._committed = True
+
+
+class _FakeNeo4jUnitOfWork:
+    def __init__(self, graph_repo: _FakeGraphRepository) -> None:
+        self.graph: _FakeGraphRepository | None = graph_repo
+        self._committed = False
+
+    async def __aenter__(self) -> _FakeNeo4jUnitOfWork:
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_worker_process_event_marks_completed_on_success() -> None:
+    """Successful event projection followed by mark_completed."""
+    graph_repo = _FakeGraphRepository()
+    pg_outbox = _FakePostgresOutboxRepo()
+    pg_outbox._batch = [
+        _make_event(
+            OutboxEventType.ENTITY_RESOLVED,
+            {"entity_id": str(uuid4()), "entity_type": "Service", "canonical_name": "TestSvc"},
+        )
+    ]
+
+    def pg_factory() -> _FakePostgresUnitOfWork:
+        return _FakePostgresUnitOfWork(pg_outbox)
+
+    neo4j_uow = _FakeNeo4jUnitOfWork(graph_repo)
+
+    def neo4j_factory() -> _FakeNeo4jUnitOfWork:
+        return neo4j_uow
+
+    projector = OutboxGraphProjector(cast(Neo4jGraphRepository, graph_repo))
+    worker = OutboxGraphWorker(projector, poll_interval=0.01)
+    event = pg_outbox._batch[0]
+
+    await worker._process_event(pg_factory, neo4j_factory, event)  # type: ignore[arg-type]
+
+    assert len(graph_repo.entities) == 1
+    assert event.event_id in pg_outbox.completed_ids
+
+
+@pytest.mark.asyncio
+async def test_worker_process_event_marks_failed_on_projection_error() -> None:
+    """Failed projection followed by mark_failed."""
+
+    class _ThrowingGraphRepo(_FakeGraphRepository):
+        async def create_entity(self, entity: object) -> None:
+            raise RuntimeError("Neo4j unavailable")
+
+    throwing_repo = _ThrowingGraphRepo()
+    pg_outbox = _FakePostgresOutboxRepo()
+    pg_outbox._batch = [
+        _make_event(
+            OutboxEventType.ENTITY_RESOLVED,
+            {"entity_id": str(uuid4()), "entity_type": "Service", "canonical_name": "TestSvc"},
+        )
+    ]
+
+    def pg_factory() -> _FakePostgresUnitOfWork:
+        return _FakePostgresUnitOfWork(pg_outbox)
+
+    neo4j_uow = _FakeNeo4jUnitOfWork(throwing_repo)
+
+    def neo4j_factory() -> _FakeNeo4jUnitOfWork:
+        return neo4j_uow
+
+    projector = OutboxGraphProjector(cast(Neo4jGraphRepository, throwing_repo))
+    worker = OutboxGraphWorker(projector, poll_interval=0.01)
+    event = pg_outbox._batch[0]
+
+    await worker._process_event(pg_factory, neo4j_factory, event)  # type: ignore[arg-type]
+
+    assert len(throwing_repo.entities) == 0
+    assert event.event_id in [eid for eid, _ in pg_outbox.failed_ids]
+
+
+@pytest.mark.asyncio
+async def test_worker_start_claims_batch_and_processes() -> None:
+    """start() claims a batch and processes all events."""
+    graph_repo = _FakeGraphRepository()
+    pg_outbox = _FakePostgresOutboxRepo()
+    batch = [
+        _make_event(
+            OutboxEventType.ENTITY_MENTIONED,
+            {
+                "mention_id": str(uuid4()),
+                "chunk_id": str(uuid4()),
+                "surface_form": "Redis",
+                "candidate_type": "Service",
+            },
+        ),
+        _make_event(
+            OutboxEventType.ENTITY_RESOLVED,
+            {"entity_id": str(uuid4()), "entity_type": "Service", "canonical_name": "Redis"},
+        ),
+    ]
+    pg_outbox._batch = list(batch)
+    last_event = batch[1]
+
+    neo4j_uow = _FakeNeo4jUnitOfWork(graph_repo)
+
+    def pg_factory() -> _FakePostgresUnitOfWork:
+        return _FakePostgresUnitOfWork(pg_outbox)
+
+    def neo4j_factory() -> _FakeNeo4jUnitOfWork:
+        return neo4j_uow
+
+    projector = OutboxGraphProjector(cast(Neo4jGraphRepository, graph_repo))
+    worker = OutboxGraphWorker(projector, poll_interval=0.01)
+    worker._running = True
+
+    async def run_one() -> None:
+        pg_uow = pg_factory()
+        async with pg_uow:
+            assert pg_uow.outbox is not None
+            events = await pg_uow.outbox.claim_batch(
+                batch_size=100, worker_id=WORKER_ID, lease_duration_seconds=30
+            )
+            await pg_uow.commit()
+        for ev in events:
+            await worker._process_event(cast(Any, pg_factory), cast(Any, neo4j_factory), ev)
+        worker._running = False
+
+    await run_one()
+
+    assert len(graph_repo.mentions) == 1
+    assert len(graph_repo.entities) == 1
+    assert last_event.event_id in pg_outbox.completed_ids

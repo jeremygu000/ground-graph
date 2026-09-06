@@ -8,11 +8,11 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
-from groundgraph.application.ports import OutboxRepository
 from groundgraph.domain.evidence import OutboxEvent, OutboxEventType
 from groundgraph.domain.knowledge import CanonicalEntity, EntityMention, KnowledgeFact
 from groundgraph.infrastructure.neo4j.repository import Neo4jGraphRepository
 from groundgraph.infrastructure.neo4j.unit_of_work import Neo4jUnitOfWork
+from groundgraph.infrastructure.postgres.unit_of_work import PostgresUnitOfWork
 
 logger = logging.getLogger(__name__)
 
@@ -98,10 +98,15 @@ class OutboxGraphProjector:
 
 
 class OutboxGraphWorker:
-    """Background worker that polls the Postgres outbox via OutboxRepository and projects to Neo4j.
+    """Background worker that polls the Postgres outbox and projects to Neo4j.
 
     Uses the full OutboxRepository contract with worker_id + lease + claim_token
     for stale-worker protection (see OutboxRepository port, plan.md §2.2).
+
+    Each PostgreSQL state transition (claim, completed, failed) uses its own
+    short transaction that commits immediately. Neo4j projection uses a
+    separate transaction. This follows the outbox pattern: eventual
+    consistency without distributed transactions.
     """
 
     def __init__(
@@ -115,21 +120,25 @@ class OutboxGraphWorker:
 
     async def start(
         self,
-        outbox_repo: OutboxRepository,
-        uow_factory: Callable[[], Neo4jUnitOfWork],
+        postgres_uow_factory: Callable[[], PostgresUnitOfWork],
+        neo4j_uow_factory: Callable[[], Neo4jUnitOfWork],
     ) -> None:
         """Start the worker loop using claim_batch / mark_completed / mark_failed."""
         self._running = True
         while self._running:
             try:
-                events = await outbox_repo.claim_batch(
-                    batch_size=100,
-                    worker_id=WORKER_ID,
-                    lease_duration_seconds=LEASE_DURATION_SECONDS,
-                )
+                pg_uow = postgres_uow_factory()
+                async with pg_uow:
+                    assert pg_uow.outbox is not None
+                    events = await pg_uow.outbox.claim_batch(
+                        batch_size=100,
+                        worker_id=WORKER_ID,
+                        lease_duration_seconds=LEASE_DURATION_SECONDS,
+                    )
+                    await pg_uow.commit()
                 if events:
                     for event in events:
-                        await self._process_event(outbox_repo, event, uow_factory)
+                        await self._process_event(postgres_uow_factory, neo4j_uow_factory, event)
                 await asyncio.sleep(self._poll_interval)
             except Exception:
                 logger.exception("Worker error")
@@ -137,20 +146,32 @@ class OutboxGraphWorker:
 
     async def _process_event(
         self,
-        outbox_repo: OutboxRepository,
+        postgres_uow_factory: Callable[[], PostgresUnitOfWork],
+        neo4j_uow_factory: Callable[[], Neo4jUnitOfWork],
         event: OutboxEvent,
-        uow_factory: Callable[[], Neo4jUnitOfWork],
     ) -> None:
-        uow = uow_factory()
+        neo4j_uow = neo4j_uow_factory()
         try:
-            async with uow:
-                assert uow.graph is not None, "Neo4jUnitOfWork.graph must not be None"
-                projector = OutboxGraphProjector(uow.graph)
+            async with neo4j_uow:
+                assert neo4j_uow.graph is not None
+                projector = OutboxGraphProjector(neo4j_uow.graph)
                 await projector.project_event(event)
-            await outbox_repo.mark_completed(event.event_id, event.claim_token)  # type: ignore[arg-type]
+            pg_uow = postgres_uow_factory()
+            async with pg_uow:
+                assert pg_uow.outbox is not None
+                token = event.claim_token
+                assert token is not None
+                await pg_uow.outbox.mark_completed(event.event_id, token)
+                await pg_uow.commit()
         except Exception as exc:
             logger.warning("Failed to project event %s: %s", event.event_id, exc)
-            await outbox_repo.mark_failed(event.event_id, event.claim_token, str(exc))  # type: ignore[arg-type]
+            pg_uow = postgres_uow_factory()
+            async with pg_uow:
+                assert pg_uow.outbox is not None
+                token = event.claim_token
+                assert token is not None
+                await pg_uow.outbox.mark_failed(event.event_id, token, str(exc))
+                await pg_uow.commit()
 
     def stop(self) -> None:
         """Stop the worker loop."""
