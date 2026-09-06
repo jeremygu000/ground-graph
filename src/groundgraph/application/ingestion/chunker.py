@@ -139,7 +139,12 @@ class Chunker:
                 continue
 
             chunk_start_line = section_start + text[:start].count("\n")
-            chunk_end_line = chunk_start_line + text[start:end].count("\n")
+            # ``end`` is exclusive and may point at the first character of
+            # the next line.  Derive the locator from the last character
+            # retained by ``strip()`` so a trailing newline does not advance
+            # the reported end line into the next line.
+            content_end = start + len(text[start:end].rstrip())
+            chunk_end_line = section_start + text[:content_end].count("\n")
             chunks.append((chunk_text, chunk_start_line, chunk_end_line))
 
             prev_end = end

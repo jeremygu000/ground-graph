@@ -15,9 +15,9 @@ import asyncio
 import hashlib
 import os
 import tempfile
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, Self
 from uuid import uuid4
 
 import pytest
@@ -55,6 +55,38 @@ async def _pg_session(
 def _write_file(path: str, content: str) -> None:
     with open(path, "w") as fh:
         fh.write(content)
+
+
+class _RollbackOnceUow:
+    """Test-only UoW decorator that rolls back one persistence attempt."""
+
+    documents: Any
+    outbox: Any
+    ingestion_checkpoint: Any
+
+    def __init__(self, session_factory: Callable[[], Any], inject_failure: bool) -> None:
+        self._inner = PostgresUnitOfWork(session_factory)
+        self._inject_failure = inject_failure
+
+    async def __aenter__(self) -> Self:
+        await self._inner.__aenter__()
+        self.documents = self._inner.documents
+        self.outbox = self._inner.outbox
+        self.ingestion_checkpoint = self._inner.ingestion_checkpoint
+        return self
+
+    async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
+        if self._inject_failure and exc_type is None:
+            error = RuntimeError("injected persistence failure")
+            await self._inner.__aexit__(RuntimeError, error, None)
+            raise error
+        await self._inner.__aexit__(exc_type, exc, tb)
+
+    async def commit(self) -> None:
+        await self._inner.commit()
+
+    async def rollback(self) -> None:
+        await self._inner.rollback()
 
 
 @pytest.fixture
@@ -347,12 +379,20 @@ async def test_ingest_idempotent_failure_recovery(
     - On retry, version upsert finds existing checksum (idempotent)
     - Final state has exactly 1 doc/version/chunks/outbox
 
-    This test verifies these properties directly.
+    The first persistence attempt is deliberately rolled back after the raw
+    object has been written.  The retry then uses a normal UoW and must leave
+    exactly one durable document/version/chunk set/outbox event.
     """
     async with _pg_session(postgres_component.dsn) as sf:
+        uow_calls = 0
 
         def make_uow() -> IngestionUnitOfWork:
-            return PostgresUnitOfWork(sf)  # type: ignore[return-value]
+            nonlocal uow_calls
+            uow_calls += 1
+            # Call 1 creates the source. Calls 2/4 are source reads; call 3
+            # is the first persistence transaction and is forced to roll
+            # back. Call 5 is the normal retry persistence transaction.
+            return _RollbackOnceUow(sf, inject_failure=uow_calls == 3)
 
         service = IngestionService(uow_factory=make_uow, object_store=s3_store)
 
@@ -369,6 +409,8 @@ async def test_ingest_idempotent_failure_recovery(
                     allowed_principals=["engineering"],
                 )
                 await uow.documents.find_or_create_source(source)
+                baseline = await uow.documents._session.execute(text("SELECT COUNT(*) FROM outbox"))
+                outbox_baseline = baseline.scalar_one()
                 await uow.commit()
 
             test_file = os.path.join(tmpdir, "resume.txt")
@@ -376,17 +418,24 @@ async def test_ingest_idempotent_failure_recovery(
             content_bytes = content.encode()
             await asyncio.to_thread(_write_file, test_file, content)
 
-            result1 = await service.ingest_file(
-                source_id=source_id,
-                file_path=test_file,
-                media_type="text/plain",
-            )
-            assert result1.created_new_version is True
-            doc1_id = result1.document_id
-            ver1_id = result1.version_id
+            with pytest.raises(RuntimeError, match="injected persistence failure"):
+                await service.ingest_file(
+                    source_id=source_id,
+                    file_path=test_file,
+                    media_type="text/plain",
+                )
 
             raw_key = f"sources/{source_id}/{hashlib.sha256(content_bytes).hexdigest()}/raw"
-            assert await s3_store.exists(raw_key), "raw should exist after first ingest"
+            assert await s3_store.exists(raw_key), "raw should survive the rolled-back attempt"
+
+            async with make_uow() as uow:
+                result = await uow.documents._session.execute(
+                    text("SELECT COUNT(*) FROM documents WHERE source_id = :source_id"),
+                    {"source_id": str(source_id)},
+                )
+                assert result.scalar_one() == 0
+                result = await uow.documents._session.execute(text("SELECT COUNT(*) FROM outbox"))
+                assert result.scalar_one() == outbox_baseline
 
             result2 = await service.ingest_file(
                 source_id=source_id,
@@ -394,23 +443,22 @@ async def test_ingest_idempotent_failure_recovery(
                 media_type="text/plain",
             )
 
-            assert result2.document_id == doc1_id
-            assert result2.version_id == ver1_id
-            assert result2.created_new_version is False, (
-                "re-ingest of same content should not create new version"
+            assert result2.created_new_version is True
+            assert await s3_store.exists(raw_key), (
+                "retry should reuse the content-addressed raw key"
             )
 
             async with make_uow() as uow:
-                versions = await uow.documents.list_document_versions(doc1_id)
+                versions = await uow.documents.list_document_versions(result2.document_id)
                 assert len(versions) == 1, "exactly one version should exist"
 
-                chunks = await uow.documents.list_chunks(doc1_id, ver1_id)
+                chunks = await uow.documents.list_chunks(result2.document_id, result2.version_id)
                 assert len(chunks) >= 1
 
                 session = uow.documents._session
                 result = await session.execute(
                     text("SELECT COUNT(*) FROM outbox WHERE aggregate_id = :agg_id"),
-                    {"agg_id": str(doc1_id)},
+                    {"agg_id": str(result2.document_id)},
                 )
                 event_count = result.scalar()
                 assert event_count == 1, "exactly one outbox event should exist"

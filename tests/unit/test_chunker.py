@@ -85,6 +85,22 @@ class TestChunker:
         chunks = self.chunker.chunk(content, self.document_id, self.version_id, self.principals)
         assert chunks[0].end_locator is not None
 
+    def test_end_locator_stays_on_last_line_before_protected_block(self) -> None:
+        body = "".join(f"line {line} " + "x" * 90 + "\n" for line in range(1, 20))
+        body += "```python\nprotected\n```\n" + ("tail " * 500)
+        content = ParsedContent(
+            title="Boundary",
+            body=body,
+            media_type="text/markdown",
+            code_blocks=[(20, 22)],
+        )
+
+        chunks = self.chunker.chunk(content, self.document_id, self.version_id, self.principals)
+
+        assert chunks[0].content.endswith("x"), "the first chunk should end before the code block"
+        assert chunks[0].end_locator is not None
+        assert chunks[0].end_locator.startswith("L19 ")
+
     def test_code_block_preserved_not_split(self) -> None:
         body = "# Intro\n\nParagraph.\n\n```python\ndef foo():\n    pass\n```\n\n## Conclusion"
         content = ParsedContent(
