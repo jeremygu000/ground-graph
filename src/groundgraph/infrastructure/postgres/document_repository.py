@@ -6,7 +6,6 @@ from uuid import UUID
 
 from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.exc import IntegrityError
 
 from groundgraph.application.ports import DocumentRepository
 from groundgraph.domain.documents import Chunk, ParsedDocument, SourceDescriptor
@@ -84,43 +83,40 @@ class PostgresDocumentRepository(DocumentRepository):
         return (doc.document_id, doc.current_version_id)
 
     async def upsert_document(self, document: ParsedDocument) -> tuple[ParsedDocument, bool]:
-        result = await self._session.execute(
-            select(DocumentModel).where(
-                DocumentModel.source_id == document.source_id,
-                DocumentModel.source_locator == document.source_locator,
+        stmt = (
+            pg_insert(DocumentModel)
+            .values(
+                document_id=document.document_id,
+                source_id=document.source_id,
+                source_locator=document.source_locator,
+                title=document.title,
+                media_type=document.media_type,
+                current_version_id=document.version_id,
             )
+            .on_conflict_do_nothing(index_elements=["source_id", "source_locator"])
+            .returning(DocumentModel.document_id)
         )
-        existing_doc = result.scalar_one_or_none()
-        is_new = existing_doc is None
+        result = await self._session.execute(stmt)
+        winner_id_row = result.scalar_one_or_none()
 
+        is_new = winner_id_row is not None
+        document_id: UUID
         if is_new:
-            try:
-                await self._session.execute(
-                    pg_insert(DocumentModel).values(
-                        document_id=document.document_id,
-                        source_id=document.source_id,
-                        source_locator=document.source_locator,
-                        title=document.title,
-                        media_type=document.media_type,
-                        current_version_id=document.version_id,
-                    )
-                )
-            except IntegrityError:
-                await self._session.rollback()
-                result = await self._session.execute(
-                    select(DocumentModel).where(
-                        DocumentModel.source_id == document.source_id,
-                        DocumentModel.source_locator == document.source_locator,
-                    )
-                )
-                existing_doc = result.scalar_one_or_none()
-                is_new = False
+            document_id = document.document_id
         else:
+            winner_result = await self._session.execute(
+                select(DocumentModel.document_id).where(
+                    DocumentModel.source_id == document.source_id,
+                    DocumentModel.source_locator == document.source_locator,
+                )
+            )
+            document_id = winner_result.scalar_one()
+
+        if not is_new:
             await self._session.execute(
                 update(DocumentModel)
                 .where(
-                    DocumentModel.source_id == document.source_id,
-                    DocumentModel.source_locator == document.source_locator,
+                    DocumentModel.document_id == document_id,
                 )
                 .values(
                     current_version_id=document.version_id,
@@ -128,12 +124,10 @@ class PostgresDocumentRepository(DocumentRepository):
                     media_type=document.media_type,
                 )
             )
-
-        if not is_new:
             await self._session.execute(
                 update(DocumentVersionModel)
                 .where(
-                    DocumentVersionModel.document_id == document.document_id,
+                    DocumentVersionModel.document_id == document_id,
                     DocumentVersionModel.version_id != document.version_id,
                 )
                 .values(is_current=False)
@@ -141,7 +135,7 @@ class PostgresDocumentRepository(DocumentRepository):
 
         version = DocumentVersionModel(
             version_id=document.version_id,
-            document_id=document.document_id,
+            document_id=document_id,
             checksum=document.checksum,
             content=document.content,
             doc_metadata=snapshot_json_object(document.metadata),

@@ -175,20 +175,19 @@ async def test_document_repository_happy_paths() -> None:
         responses=[
             _Result(row=None),  # 0: find_or_create_source first SELECT (source not found)
             _Result(row=source_row),  # 1: find_or_create_source second SELECT
-            _Result(row=None),  # 2: upsert_document SELECT (new doc, no existing)
-            _Result(),  # 3: upsert_document version insert
-            _Result(row=source_row),  # 4: get_source
-            _Result(rows=[source_row, _source_model(uuid4(), "/docs/b")]),  # 5: list_sources
-            _Result(row=document_row),  # 6: get_document
-            _Result(row=version_row),  # 7: get_document_version
-            _Result(row=document_row),  # 8: get_document
-            _Result(row=version_row),  # 9: get_document_version
-            _Result(row=document_row),  # 10: get_document
-            _Result(rows=[version_row, older_version_row]),  # 11: list_document_versions
-            _Result(row=chunk_row),  # 12: get_chunk
-            _Result(rows=[chunk_row, later_chunk_row]),  # 13: list_chunks
+            _Result(row=document_id),  # 2: upsert_document INSERT...RETURNING document_id (new doc)
+            _Result(row=source_row),  # 3: get_source
+            _Result(rows=[source_row, _source_model(uuid4(), "/docs/b")]),  # 4: list_sources
+            _Result(row=document_row),  # 5: get_document
+            _Result(row=version_row),  # 6: get_document_version
+            _Result(row=document_row),  # 7: get_document
+            _Result(row=version_row),  # 8: get_document_version
+            _Result(row=document_row),  # 9: get_document
+            _Result(rows=[version_row, older_version_row]),  # 10: list_document_versions
+            _Result(row=chunk_row),  # 11: get_chunk
+            _Result(rows=[chunk_row, later_chunk_row]),  # 12: list_chunks
+            _Result(),  # 13: delete_document (versions)
             _Result(),  # 14: delete_document (versions)
-            _Result(),  # 15: delete_document (versions)
         ]
     )
     repo = PostgresDocumentRepository(cast(Any, session))
@@ -264,7 +263,7 @@ async def test_document_repository_happy_paths() -> None:
 
     assert session.flushed == 2
     assert len(session.added) == 2
-    assert len(session.executed) == 16
+    assert len(session.executed) == 15
 
 
 @pytest.mark.asyncio
@@ -332,12 +331,9 @@ async def test_document_repository_rejects_mutated_metadata() -> None:
     doc_id = uuid4()
     ver_id = uuid4()
     src_id = uuid4()
-    document_row = _document_model(
-        doc_id, src_id, current_version_id=ver_id, source_locator="/test/locator"
-    )
     session = _Session(
         responses=[
-            _Result(row=document_row),  # upsert_document conflict_stmt returning
+            _Result(row=doc_id),  # upsert_document INSERT...RETURNING document_id
         ]
     )
     repo = PostgresDocumentRepository(cast(Any, session))

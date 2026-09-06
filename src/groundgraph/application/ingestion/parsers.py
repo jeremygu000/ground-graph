@@ -124,13 +124,12 @@ class MarkdownParser(BaseParser):
         while i < len(lines):
             line = lines[i].strip()
             if "|" in line and not line.startswith("```"):
-                header_line = i + 1
-                sep_line = i + 2 if i + 2 < len(lines) else -1
-                if sep_line > 0 and re.match(r"^\|[-:| ]+\|$", lines[sep_line].strip()):
-                    end = header_line + 2
+                sep_line = i + 1
+                if sep_line < len(lines) and re.match(r"^\|[-:| ]+\|$", lines[sep_line].strip()):
+                    end = i + 2
                     while end < len(lines) and lines[end].strip().startswith("|"):
                         end += 1
-                    results.append((header_line, end - 1))
+                    results.append((i + 1, end - 1))
                     i = end
                     continue
             i += 1
@@ -254,22 +253,54 @@ class HtmlParser(BaseParser):
             results.append((starts[i], starts[i + 1]))
         return results
 
-    def _extract_tables(self, html: str) -> list[tuple[int, int]]:
+    def _extract_tables(self, body: str) -> list[tuple[int, int]]:
         results: list[tuple[int, int]] = []
-        pattern = re.compile(r"<table[^>]*>.*?</table>", re.DOTALL | re.IGNORECASE)
-        for m in pattern.finditer(html):
-            start = html.count("\n", 0, m.start()) + 1
-            end = html.count("\n", 0, m.end())
-            results.append((start, end))
+        lines = body.splitlines()
+        i = 0
+        while i < len(lines):
+            line = lines[i].strip()
+            if "|" in line and not line.startswith("```"):
+                sep_line = i + 1
+                if sep_line < len(lines) and re.match(r"^\|[-:| ]+\|$", lines[sep_line].strip()):
+                    end = i + 2
+                    while end < len(lines) and lines[end].strip().startswith("|"):
+                        end += 1
+                    results.append((i + 1, end - 1))
+                    i = end
+                    continue
+            i += 1
         return results
 
-    def _extract_list_items(self, html: str) -> list[tuple[int, int]]:
+    def _extract_list_items(self, body: str) -> list[tuple[int, int]]:
         results: list[tuple[int, int]] = []
-        pattern = re.compile(r"<li[^>]*>.*?</li>", re.DOTALL | re.IGNORECASE)
-        for m in pattern.finditer(html):
-            start = html.count("\n", 0, m.start()) + 1
-            end = html.count("\n", 0, m.end())
-            results.append((start, end))
+        lines = body.splitlines()
+        i = 0
+        while i < len(lines):
+            line = lines[i].strip()
+            if re.match(r"^[-*+]\s+\S|^\d+\.\s+\S", line):
+                start = i + 1
+                indent = len(line) - len(line.lstrip())
+                j = i + 1
+                while j < len(lines):
+                    next_line = lines[j].strip()
+                    if not next_line:
+                        j += 1
+                        continue
+                    next_indent = len(lines[j]) - len(lines[j].lstrip())
+                    if next_indent > indent and (
+                        next_line.startswith("-")
+                        or next_line.startswith("*")
+                        or next_line.startswith("+")
+                        or re.match(r"^\d+\.", next_line)
+                    ):
+                        break
+                    if next_indent <= indent and next_line and not next_line.startswith(" "):
+                        break
+                    j += 1
+                results.append((start, j))
+                i = j
+                continue
+            i += 1
         return results
 
 
