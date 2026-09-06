@@ -63,17 +63,13 @@ class IngestionService:
                 assert checkpoint.document_id is not None
                 assert checkpoint.version_id is not None
                 existing_doc = await uow.documents.get_document(checkpoint.document_id)
-                if existing_doc is not None:
-                    current_version = await uow.documents.get_document_version(
-                        checkpoint.document_id, checkpoint.version_id
+                if existing_doc is not None and existing_doc.checksum == checksum:
+                    return IngestionResult(
+                        document_id=checkpoint.document_id,
+                        version_id=existing_doc.version_id,
+                        created_new_version=False,
+                        tenant_id=source.tenant_id,
                     )
-                    if current_version is not None and current_version.checksum == checksum:
-                        return IngestionResult(
-                            document_id=checkpoint.document_id,
-                            version_id=checkpoint.version_id,
-                            created_new_version=False,
-                            tenant_id=source.tenant_id,
-                        )
 
             existing = await uow.documents.find_active_document_by_canonical_locator(
                 source_id, canonical_locator
@@ -119,7 +115,7 @@ class IngestionService:
                 },
                 effective_at=datetime.now(UTC),
             )
-            canonical_doc, _ = await uow.documents.upsert_document(document)
+            canonical_doc, is_new_version = await uow.documents.upsert_document(document)
             canonical_doc_id = canonical_doc.document_id
             canonical_version_id = canonical_doc.version_id
 
@@ -132,34 +128,35 @@ class IngestionService:
                 version_id=canonical_version_id,
             )
 
-            chunks = self._chunker.chunk(
-                content=parsed,
-                document_id=canonical_doc_id,
-                version_id=canonical_version_id,
-                allowed_principals=source.allowed_principals,
-            )
-            for chunk in chunks:
-                await uow.documents.create_chunk(chunk)
+            if is_new_version:
+                chunks = self._chunker.chunk(
+                    content=parsed,
+                    document_id=canonical_doc_id,
+                    version_id=canonical_version_id,
+                    allowed_principals=source.allowed_principals,
+                )
+                for chunk in chunks:
+                    await uow.documents.create_chunk(chunk)
 
-            event = OutboxEvent(
-                event_id=uuid4(),
-                aggregate_type="document",
-                aggregate_id=canonical_doc_id,
-                event_type=OutboxEventType.DOCUMENT_PARSED,
-                payload={
-                    "document_id": str(canonical_doc_id),
-                    "version_id": str(canonical_version_id),
-                    "source_id": str(source_id),
-                    "tenant_id": source.tenant_id,
-                },
-                created_at=datetime.now(UTC),
-            )
-            await uow.outbox.add(event)
+                event = OutboxEvent(
+                    event_id=uuid4(),
+                    aggregate_type="document",
+                    aggregate_id=canonical_doc_id,
+                    event_type=OutboxEventType.DOCUMENT_PARSED,
+                    payload={
+                        "document_id": str(canonical_doc_id),
+                        "version_id": str(canonical_version_id),
+                        "source_id": str(source_id),
+                        "tenant_id": source.tenant_id,
+                    },
+                    created_at=datetime.now(UTC),
+                )
+                await uow.outbox.add(event)
 
             return IngestionResult(
                 document_id=canonical_doc.document_id,
                 version_id=canonical_doc.version_id,
-                created_new_version=True,
+                created_new_version=is_new_version,
                 tenant_id=source.tenant_id,
             )
 

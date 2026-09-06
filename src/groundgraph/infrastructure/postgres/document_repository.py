@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from uuid import UUID
 
-from sqlalchemy import select, update
+from sqlalchemy import select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from groundgraph.application.ports import DocumentRepository
@@ -83,7 +84,7 @@ class PostgresDocumentRepository(DocumentRepository):
         return (doc.document_id, doc.current_version_id)
 
     async def upsert_document(self, document: ParsedDocument) -> tuple[ParsedDocument, bool]:
-        stmt = (
+        doc_stmt = (
             pg_insert(DocumentModel)
             .values(
                 document_id=document.document_id,
@@ -93,87 +94,54 @@ class PostgresDocumentRepository(DocumentRepository):
                 media_type=document.media_type,
                 current_version_id=document.version_id,
             )
-            .on_conflict_do_nothing(index_elements=["source_id", "source_locator"])
+            .on_conflict_do_update(
+                index_elements=["source_id", "source_locator"],
+                set_={
+                    "current_version_id": document.version_id,
+                    "title": document.title,
+                    "media_type": document.media_type,
+                },
+            )
             .returning(DocumentModel.document_id)
         )
-        result = await self._session.execute(stmt)
-        winner_id_row = result.scalar_one_or_none()
+        doc_result = await self._session.execute(doc_stmt)
+        doc_result.scalar_one_or_none()
+        document_id: UUID = document.document_id
 
-        is_new = winner_id_row is not None
-        document_id: UUID
-        if is_new:
-            document_id = document.document_id
-        else:
-            winner_result = await self._session.execute(
-                select(DocumentModel.document_id).where(
-                    DocumentModel.source_id == document.source_id,
-                    DocumentModel.source_locator == document.source_locator,
-                )
-            )
-            document_id = winner_result.scalar_one()
-
-        if not is_new:
-            await self._session.execute(
-                update(DocumentModel)
-                .where(
-                    DocumentModel.document_id == document_id,
-                )
-                .values(
-                    current_version_id=document.version_id,
-                    title=document.title,
-                    media_type=document.media_type,
-                )
-            )
-            await self._session.execute(
-                update(DocumentVersionModel)
-                .where(
-                    DocumentVersionModel.document_id == document_id,
-                    DocumentVersionModel.version_id != document.version_id,
-                )
-                .values(is_current=False)
-            )
-
-        version = DocumentVersionModel(
-            version_id=document.version_id,
-            document_id=document_id,
-            checksum=document.checksum,
-            content=document.content,
-            doc_metadata=snapshot_json_object(document.metadata),
-            effective_at=document.effective_at,
-            is_current=True,
+        await self._session.execute(
+            update(DocumentVersionModel)
+            .where(DocumentVersionModel.document_id == document_id)
+            .values(is_current=False)
         )
-        self._session.add(version)
-        try:
-            await self._session.flush()
-        except Exception:
-            existing = await self._session.execute(
-                select(DocumentVersionModel.version_id).where(
-                    DocumentVersionModel.document_id == document_id,
-                    DocumentVersionModel.checksum == document.checksum,
-                )
-            )
-            existing_version_id = existing.scalar_one_or_none()
-            if existing_version_id is None:
-                raise
-            return (
-                ParsedDocument(
-                    document_id=document_id,
-                    version_id=existing_version_id,
-                    source_id=document.source_id,
-                    source_locator=document.source_locator,
-                    title=document.title,
-                    media_type=document.media_type,
-                    checksum=document.checksum,
-                    content=document.content,
-                    metadata=document.metadata,
-                    effective_at=document.effective_at,
-                ),
-                False,
-            )
+
+        version_stmt = text(
+            """
+            INSERT INTO document_versions
+                (version_id, document_id, checksum, content, doc_metadata, effective_at, is_current)
+            VALUES
+                (:version_id, :document_id, :checksum, :content, :doc_metadata, :effective_at, TRUE)
+            ON CONFLICT (document_id, checksum) DO UPDATE
+                SET is_current = TRUE
+            RETURNING version_id
+            """
+        )
+        ver_result = await self._session.execute(
+            version_stmt,
+            {
+                "version_id": document.version_id,
+                "document_id": document_id,
+                "checksum": document.checksum,
+                "content": document.content,
+                "doc_metadata": json.dumps(snapshot_json_object(document.metadata)),
+                "effective_at": document.effective_at,
+            },
+        )
+        returned_version_id = ver_result.scalar_one_or_none()
+        await self._session.flush()
 
         canonical = ParsedDocument(
             document_id=document_id,
-            version_id=document.version_id,
+            version_id=returned_version_id or document.version_id,
             source_id=document.source_id,
             source_locator=document.source_locator,
             title=document.title,
@@ -183,7 +151,8 @@ class PostgresDocumentRepository(DocumentRepository):
             metadata=document.metadata,
             effective_at=document.effective_at,
         )
-        return (canonical, is_new)
+        is_new_version = returned_version_id == document.version_id
+        return (canonical, is_new_version)
 
     async def create_document(self, document: ParsedDocument) -> ParsedDocument:
         doc, _ = await self.upsert_document(document)

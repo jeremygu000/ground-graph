@@ -138,14 +138,19 @@ class _FakeDocumentRepository:
         return None
 
     async def upsert_document(self, doc: ParsedDocument) -> tuple[ParsedDocument, bool]:
-        for i, existing in enumerate(self.documents):
+        for existing in self.documents:
             if (
                 existing.source_id == doc.source_id
                 and existing.source_locator == doc.source_locator
             ):
-                self.documents[i] = doc
+                existing_versions_key = (doc.document_id, doc.checksum)
+                if existing_versions_key in self._versions:
+                    existing_ver = self._versions[existing_versions_key]
+                    return (existing_ver, False)
                 self._versions[(doc.document_id, doc.version_id)] = doc
-                return (doc, False)
+                self.documents = [d for d in self.documents if d.document_id != doc.document_id]
+                self.documents.append(doc)
+                return (doc, True)
         self.documents.append(doc)
         self._versions[(doc.document_id, doc.version_id)] = doc
         return (doc, True)

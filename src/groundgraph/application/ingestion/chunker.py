@@ -116,7 +116,7 @@ class Chunker:
         text_len = len(text)
         line_to_char = self._build_line_to_char_map(text)
         protected = self._build_protected_ranges_char(
-            content, section_start, line_to_char, text_len
+            text, content, section_start, line_to_char, text_len
         )
 
         chunks: list[tuple[str, int, int]] = []
@@ -166,6 +166,7 @@ class Chunker:
 
     def _build_protected_ranges_char(
         self,
+        text: str,
         content: ParsedContent,
         section_start: int,
         line_to_char: dict[int, int],
@@ -173,7 +174,7 @@ class Chunker:
     ) -> list[tuple[int, int]]:
         ranges: list[tuple[int, int]] = []
         section_rel_start = 1
-        section_rel_end = section_rel_start + text_length
+        section_rel_end = section_rel_start + text.count("\n")
 
         def add_ranges(items: list[tuple[int, int]]) -> None:
             for item_start, item_end in items:
@@ -181,6 +182,8 @@ class Chunker:
                     continue
                 rel_start = item_start - section_start + 1
                 rel_end = item_end - section_start + 1
+                if rel_start <= 0 or rel_end <= 0:
+                    continue
                 char_start = line_to_char.get(rel_start, 0)
                 char_end = line_to_char.get(rel_end + 1, text_length)
                 if char_start < char_end:
@@ -205,11 +208,12 @@ class Chunker:
     ) -> int | None:
         for p_start, p_end in protected:
             if p_start > chunk_start and p_start < target:
-                if p_start != prev_end:
-                    return p_start
-                return p_end
+                return p_end if p_start == prev_end else p_start
             if p_start <= chunk_start <= p_end and p_end > target:
-                return p_end
+                if p_end - chunk_start < target - chunk_start:
+                    return p_end
+                sentence_pos = self._find_sentence_boundary(text, chunk_start)
+                return sentence_pos if chunk_start < sentence_pos < target else target
             if p_start < target <= p_end:
                 return p_start
         return None

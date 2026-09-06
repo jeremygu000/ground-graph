@@ -176,18 +176,20 @@ async def test_document_repository_happy_paths() -> None:
             _Result(row=None),  # 0: find_or_create_source first SELECT (source not found)
             _Result(row=source_row),  # 1: find_or_create_source second SELECT
             _Result(row=document_id),  # 2: upsert_document INSERT...RETURNING document_id (new doc)
-            _Result(row=source_row),  # 3: get_source
-            _Result(rows=[source_row, _source_model(uuid4(), "/docs/b")]),  # 4: list_sources
-            _Result(row=document_row),  # 5: get_document
-            _Result(row=version_row),  # 6: get_document_version
+            _Result(),  # 3: upsert_document UPDATE document_versions SET is_current=FALSE
+            _Result(row=version_id),  # 4: upsert_document version INSERT...RETURNING version_id
+            _Result(row=source_row),  # 5: get_source
+            _Result(rows=[source_row, _source_model(uuid4(), "/docs/b")]),  # 6: list_sources
             _Result(row=document_row),  # 7: get_document
             _Result(row=version_row),  # 8: get_document_version
             _Result(row=document_row),  # 9: get_document
-            _Result(rows=[version_row, older_version_row]),  # 10: list_document_versions
-            _Result(row=chunk_row),  # 11: get_chunk
-            _Result(rows=[chunk_row, later_chunk_row]),  # 12: list_chunks
-            _Result(),  # 13: delete_document (versions)
-            _Result(),  # 14: delete_document (versions)
+            _Result(row=version_row),  # 10: get_document_version
+            _Result(row=document_row),  # 11: get_document
+            _Result(rows=[version_row, older_version_row]),  # 12: list_document_versions
+            _Result(row=chunk_row),  # 13: get_chunk
+            _Result(rows=[chunk_row, later_chunk_row]),  # 14: list_chunks
+            _Result(),  # 15: delete_document (versions)
+            _Result(),  # 16: delete_document (versions)
         ]
     )
     repo = PostgresDocumentRepository(cast(Any, session))
@@ -262,8 +264,8 @@ async def test_document_repository_happy_paths() -> None:
     await repo.delete_document(document_id)
 
     assert session.flushed == 2
-    assert len(session.added) == 2
-    assert len(session.executed) == 15
+    assert len(session.added) == 1
+    assert len(session.executed) == 17
 
 
 @pytest.mark.asyncio
