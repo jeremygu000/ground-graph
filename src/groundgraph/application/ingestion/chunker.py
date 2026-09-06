@@ -139,7 +139,7 @@ class Chunker:
                 continue
 
             chunk_start_line = section_start + text[:start].count("\n")
-            chunk_end_line = section_start + text[:end].count("\n")
+            chunk_end_line = section_start + text[start:end].count("\n")
             chunks.append((chunk_text, chunk_start_line, chunk_end_line))
 
             prev_end = end
@@ -152,6 +152,12 @@ class Chunker:
                 next_start = max(next_start, prev_start_char + 1)
 
             next_start = max(next_start, start + 1)
+
+            for p_start, p_end in protected:
+                if p_start < next_start < p_end:
+                    next_start = p_end
+                    break
+
             start = min(next_start, text_len)
 
         return chunks

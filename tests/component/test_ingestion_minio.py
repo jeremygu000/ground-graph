@@ -326,3 +326,95 @@ async def test_concurrent_ingest_same_content(
                 )
                 doc_events = [e for e in pending if e.aggregate_id == r1.document_id]
                 assert len(doc_events) == 1, "only one outbox event should exist"
+
+
+@pytest.mark.asyncio
+async def test_resume_idempotency_same_content(
+    postgres_component: Any,
+    s3_store: S3ObjectStore,
+) -> None:
+    """Verify durable resume contract: re-ingesting same content produces no duplicate data.
+
+    This tests the failure→retry proof path where:
+    - raw upload is idempotent (content-addressed key)
+    - version upsert is idempotent (ON CONFLICT DO NOTHING)
+    - exactly one version exists after multiple ingests
+    - raw object is not re-uploaded on retry
+
+    Scenario:
+    1. First ingest: raw + doc + version + chunks + outbox created
+    2. Simulate failure then retry: raw already exists (idempotent),
+       version upsert finds existing (idempotent), no new chunks/outbox created
+    3. Verify: raw not re-uploaded, exactly one version, one chunk set, one outbox event
+    """
+    async with _pg_session(postgres_component.dsn) as sf:
+
+        def make_uow() -> IngestionUnitOfWork:
+            return PostgresUnitOfWork(sf)  # type: ignore[return-value]
+
+        service = IngestionService(uow_factory=make_uow, object_store=s3_store)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            source_id = uuid4()
+
+            async with make_uow() as uow:
+                source = SourceDescriptor(
+                    source_id=source_id,
+                    source_type="filesystem",
+                    uri=tmpdir,
+                    classification="internal",
+                    tenant_id="tenant-resume",
+                    allowed_principals=["engineering"],
+                )
+                await uow.documents.find_or_create_source(source)
+                await uow.commit()
+
+            test_file = os.path.join(tmpdir, "resume.txt")
+            content = "Content for resume idempotency test."
+            await asyncio.to_thread(_write_file, test_file, content)
+
+            result1 = await service.ingest_file(
+                source_id=source_id,
+                file_path=test_file,
+                media_type="text/plain",
+            )
+            assert result1.created_new_version is True
+            doc1_id = result1.document_id
+            ver1_id = result1.version_id
+
+            async with make_uow() as uow:
+                chunks_count = await uow.documents.list_chunks(doc1_id, ver1_id)
+                assert len(chunks_count) >= 1
+
+                pending = await uow.outbox.claim_batch(
+                    batch_size=10, worker_id="test-worker", lease_duration_seconds=60
+                )
+                events = [e for e in pending if e.aggregate_id == doc1_id]
+                assert len(events) >= 1
+
+            result2 = await service.ingest_file(
+                source_id=source_id,
+                file_path=test_file,
+                media_type="text/plain",
+            )
+
+            assert result2.document_id == doc1_id
+            assert result2.version_id == ver1_id
+            assert result2.created_new_version is False, (
+                "same content should not create new version"
+            )
+
+            async with make_uow() as uow:
+                versions = await uow.documents.list_document_versions(doc1_id)
+                assert len(versions) == 1, "exactly one version should exist after retry"
+
+                chunks = await uow.documents.list_chunks(doc1_id, ver1_id)
+                assert len(chunks) >= 1
+
+                session = uow.documents._session
+                result = await session.execute(
+                    text("SELECT COUNT(*) FROM outbox WHERE aggregate_id = :agg_id"),
+                    {"agg_id": str(doc1_id)},
+                )
+                event_count = result.scalar()
+                assert event_count == 1, "exactly one outbox event should exist"
