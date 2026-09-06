@@ -143,7 +143,33 @@ class PostgresDocumentRepository(DocumentRepository):
             is_current=True,
         )
         self._session.add(version)
-        await self._session.flush()
+        try:
+            await self._session.flush()
+        except Exception:
+            existing = await self._session.execute(
+                select(DocumentVersionModel.version_id).where(
+                    DocumentVersionModel.document_id == document_id,
+                    DocumentVersionModel.checksum == document.checksum,
+                )
+            )
+            existing_version_id = existing.scalar_one_or_none()
+            if existing_version_id is None:
+                raise
+            return (
+                ParsedDocument(
+                    document_id=document_id,
+                    version_id=existing_version_id,
+                    source_id=document.source_id,
+                    source_locator=document.source_locator,
+                    title=document.title,
+                    media_type=document.media_type,
+                    checksum=document.checksum,
+                    content=document.content,
+                    metadata=document.metadata,
+                    effective_at=document.effective_at,
+                ),
+                False,
+            )
 
         canonical = ParsedDocument(
             document_id=document_id,

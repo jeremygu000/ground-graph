@@ -127,7 +127,9 @@ class MarkdownParser(BaseParser):
                 sep_line = i + 1
                 if sep_line < len(lines) and re.match(r"^\|[-:| ]+\|$", lines[sep_line].strip()):
                     end = sep_line + 1
-                    while end < len(lines) and lines[end].strip().startswith("|"):
+                    if end < len(lines) and re.match(r"^\|[-:| ]+\|$", lines[end].strip()):
+                        end += 1
+                    while end <= len(lines) and lines[end - 1].strip().startswith("|"):
                         end += 1
                     results.append((i + 1, end - 1))
                     i = end
@@ -297,7 +299,9 @@ class HtmlParser(BaseParser):
                 sep_line = i + 1
                 if sep_line < len(lines) and re.match(r"^\|[-:| ]+\|$", lines[sep_line].strip()):
                     end = sep_line + 1
-                    while end < len(lines) and lines[end].strip().startswith("|"):
+                    if end < len(lines) and re.match(r"^\|[-:| ]+\|$", lines[end].strip()):
+                        end += 1
+                    while end <= len(lines) and lines[end - 1].strip().startswith("|"):
                         end += 1
                     results.append((i + 1, end - 1))
                     i = end

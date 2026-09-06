@@ -191,6 +191,11 @@ class DocumentVersion(Base):
             "version_id",
             name="uq_document_versions_document_id_version_id",
         ),
+        UniqueConstraint(
+            "document_id",
+            "checksum",
+            name="uq_document_versions_document_id_checksum",
+        ),
         Index(
             "ix_document_versions_current",
             "document_id",

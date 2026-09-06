@@ -64,12 +64,16 @@ class IngestionService:
                 assert checkpoint.version_id is not None
                 existing_doc = await uow.documents.get_document(checkpoint.document_id)
                 if existing_doc is not None:
-                    return IngestionResult(
-                        document_id=checkpoint.document_id,
-                        version_id=checkpoint.version_id,
-                        created_new_version=False,
-                        tenant_id=source.tenant_id,
+                    current_version = await uow.documents.get_document_version(
+                        checkpoint.document_id, checkpoint.version_id
                     )
+                    if current_version is not None and current_version.checksum == checksum:
+                        return IngestionResult(
+                            document_id=checkpoint.document_id,
+                            version_id=checkpoint.version_id,
+                            created_new_version=False,
+                            tenant_id=source.tenant_id,
+                        )
 
             existing = await uow.documents.find_active_document_by_canonical_locator(
                 source_id, canonical_locator
@@ -97,15 +101,6 @@ class IngestionService:
             else:
                 document_id, version_id = uuid4(), uuid4()
 
-            await uow.ingestion_checkpoint.upsert_checkpoint(
-                source_id=source_id,
-                canonical_locator=canonical_locator,
-                content_checksum=checksum,
-                status=IngestionCheckpointStatus.PERSISTED,
-                document_id=document_id,
-                version_id=version_id,
-            )
-
             parsed = self._parse(raw_bytes, media_type)
 
             document = ParsedDocument(
@@ -127,6 +122,15 @@ class IngestionService:
             canonical_doc, _ = await uow.documents.upsert_document(document)
             canonical_doc_id = canonical_doc.document_id
             canonical_version_id = canonical_doc.version_id
+
+            await uow.ingestion_checkpoint.upsert_checkpoint(
+                source_id=source_id,
+                canonical_locator=canonical_locator,
+                content_checksum=checksum,
+                status=IngestionCheckpointStatus.PERSISTED,
+                document_id=canonical_doc_id,
+                version_id=canonical_version_id,
+            )
 
             chunks = self._chunker.chunk(
                 content=parsed,

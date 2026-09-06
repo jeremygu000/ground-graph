@@ -121,11 +121,12 @@ class Chunker:
 
         chunks: list[tuple[str, int, int]] = []
         start = 0
+        prev_end: int | None = None
 
         while start < text_len:
             target = min(start + estimated_chars, text_len)
 
-            safe_end = self._find_safe_end(text, target, protected, start)
+            safe_end = self._find_safe_end(text, target, protected, start, prev_end)
 
             end = safe_end if safe_end is not None else target
 
@@ -137,26 +138,17 @@ class Chunker:
                 start = min(start + 1, text_len)
                 continue
 
-            end_aligned = end
-            if end_aligned < text_len and text[end_aligned - 1] != "\n":
-                nl_pos = text.find("\n", start, end)
-                if nl_pos >= 0:
-                    end_aligned = nl_pos + 1
-
             chunk_start_line = section_start + text[:start].count("\n")
-            chunk_end_line = (
-                section_start + text[:end_aligned].count("\n")
-                if end_aligned < text_len
-                else section_start + text.count("\n")
-            )
+            chunk_end_line = section_start + text[:end].count("\n")
             chunks.append((chunk_text, chunk_start_line, chunk_end_line))
 
+            prev_end = end
             if end >= text_len:
                 break
 
             next_start = end - overlap_chars
-            if chunks:
-                prev_start_char = line_to_char.get(chunks[-1][1] - section_start + 1, 0)
+            if len(chunks) > 1:
+                prev_start_char = line_to_char.get(chunks[-2][2] - section_start + 1, 0)
                 next_start = max(next_start, prev_start_char + 1)
 
             next_start = max(next_start, start + 1)
@@ -181,18 +173,18 @@ class Chunker:
     ) -> list[tuple[int, int]]:
         ranges: list[tuple[int, int]] = []
         section_rel_start = 1
+        section_rel_end = section_rel_start + text_length
 
         def add_ranges(items: list[tuple[int, int]]) -> None:
             for item_start, item_end in items:
-                if self._ranges_overlap(
-                    item_start, item_end, section_rel_start, section_rel_start + 999999
-                ):
-                    rel_start = item_start - section_start + 1
-                    rel_end = item_end - section_start + 1
-                    char_start = line_to_char.get(rel_start, 0)
-                    char_end = line_to_char.get(rel_end + 1, text_length)
-                    if char_start < char_end:
-                        ranges.append((char_start, char_end))
+                if item_end < section_start or item_start > section_rel_end + section_start - 1:
+                    continue
+                rel_start = item_start - section_start + 1
+                rel_end = item_end - section_start + 1
+                char_start = line_to_char.get(rel_start, 0)
+                char_end = line_to_char.get(rel_end + 1, text_length)
+                if char_start < char_end:
+                    ranges.append((char_start, char_end))
 
         add_ranges(content.code_blocks)
         add_ranges(content.tables)
@@ -204,11 +196,18 @@ class Chunker:
         return a_start <= b_end and b_start <= a_end
 
     def _find_safe_end(
-        self, text: str, target: int, protected: list[tuple[int, int]], chunk_start: int
+        self,
+        text: str,
+        target: int,
+        protected: list[tuple[int, int]],
+        chunk_start: int,
+        prev_end: int | None = None,
     ) -> int | None:
         for p_start, p_end in protected:
             if p_start > chunk_start and p_start < target:
-                return p_start
+                if p_start != prev_end:
+                    return p_start
+                return p_end
             if p_start <= chunk_start <= p_end and p_end > target:
                 return p_end
             if p_start < target <= p_end:
