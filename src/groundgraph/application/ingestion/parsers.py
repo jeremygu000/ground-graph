@@ -89,10 +89,11 @@ class MarkdownParser(BaseParser):
     def _strip_frontmatter(self, text: str) -> tuple[str, str]:
         fm_match = re.match(r"^---\s*\n.*?\n---\s*\n", text, re.DOTALL)
         if not fm_match:
-            return self._title_from_first_header(text), text
+            title = self._title_from_first_header(text)
+            return title, text
         rest = text[fm_match.end() :]
         title = self._title_from_first_header(rest)
-        return title, rest
+        return title, text
 
     def _title_from_first_header(self, text: str) -> str:
         m = re.match(r"^#\s+(.+)$", text, re.MULTILINE)

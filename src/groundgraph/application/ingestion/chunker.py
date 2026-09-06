@@ -52,7 +52,7 @@ class Chunker:
                         token_count=self._estimate_tokens(sub_body),
                         checksum=self._checksum(sub_body),
                         start_locator=self._locate(sub_start, sub_body),
-                        end_locator=self._locate(sub_end, sub_body),
+                        end_locator=self._locate_end(sub_end, sub_body),
                         allowed_principals=allowed_principals,
                     )
                 )
@@ -227,3 +227,10 @@ class Chunker:
     def _locate(line: int, text: str) -> str:
         first_line = text.split("\n", 1)[0][:60].replace("\n", " ").strip()
         return f"L{line} {first_line}"
+
+    @staticmethod
+    def _locate_end(line: int, text: str) -> str:
+        lines = text.split("\n")
+        last_line = (lines[-1] if lines else "").strip()
+        last_line_preview = last_line[:60].replace("\n", " ").strip()
+        return f"L{line} {last_line_preview}"

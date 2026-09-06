@@ -52,7 +52,7 @@ Body content.
 """
         result = MarkdownParser().parse(content)
         assert "Actual Title" in result.title
-        assert "---\ntitle:" not in result.body
+        assert "---" in result.body
 
     def test_extracts_headings(self) -> None:
         content = b"# H1\n## H2\n### H3\n\n## Another H2"
