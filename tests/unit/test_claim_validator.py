@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from typing import cast
 from uuid import uuid4
 
 import pytest
 
 from groundgraph.application.answering.claim_validator import DeterministicClaimValidator
-from groundgraph.domain.retrieval import AnswerClaim, Evidence
+from groundgraph.domain.retrieval import AnswerClaim, Evidence, QueryResponse
 
 
 @pytest.mark.asyncio
@@ -30,21 +31,17 @@ async def test_validate_supported_claim_with_valid_evidence() -> None:
         evidence_ids=[evidence_id],
         support_status="supported",
     )
-    response = type(
-        "Response",
-        (),
-        {
-            "execution_run_id": uuid4(),
-            "answer": "PostgreSQL is a database.",
-            "status": "answered",
-            "claims": [claim],
-            "citations": [],
-            "confidence_band": "high",
-            "warnings": [],
-        },
-    )()
+    response = QueryResponse(
+        execution_run_id=uuid4(),
+        answer="PostgreSQL is a database.",
+        status="answered",
+        claims=[claim],
+        citations=[],
+        confidence_band="high",
+        warnings=[],
+    )
 
-    result = await validator.validate(response, [evidence])
+    result = await validator.validate(cast(QueryResponse, response), [evidence])
 
     assert len(result.claims) == 1
     assert result.claims[0].support_status == "supported"
@@ -62,21 +59,17 @@ async def test_validate_unsupported_claim_unchanged() -> None:
         evidence_ids=[],
         support_status="unsupported",
     )
-    response = type(
-        "Response",
-        (),
-        {
-            "execution_run_id": uuid4(),
-            "answer": None,
-            "status": "insufficient_evidence",
-            "claims": [claim],
-            "citations": [],
-            "confidence_band": "low",
-            "warnings": [],
-        },
-    )()
+    response = QueryResponse(
+        execution_run_id=uuid4(),
+        answer=None,
+        status="insufficient_evidence",
+        claims=[claim],
+        citations=[],
+        confidence_band="low",
+        warnings=[],
+    )
 
-    result = await validator.validate(response, [])
+    result = await validator.validate(cast(QueryResponse, response), [])
 
     assert len(result.claims) == 1
     assert result.claims[0].support_status == "unsupported"
@@ -95,21 +88,17 @@ async def test_validate_downgrades_to_unsupported_when_all_evidence_missing() ->
         evidence_ids=[missing_id],
         support_status="supported",
     )
-    response = type(
-        "Response",
-        (),
-        {
-            "execution_run_id": uuid4(),
-            "answer": "Some claim.",
-            "status": "answered",
-            "claims": [claim],
-            "citations": [],
-            "confidence_band": "medium",
-            "warnings": [],
-        },
-    )()
+    response = QueryResponse(
+        execution_run_id=uuid4(),
+        answer="Some claim.",
+        status="answered",
+        claims=[claim],
+        citations=[],
+        confidence_band="medium",
+        warnings=[],
+    )
 
-    result = await validator.validate(response, [])
+    result = await validator.validate(cast(QueryResponse, response), [])
 
     assert len(result.claims) == 1
     assert result.claims[0].support_status == "unsupported"
@@ -136,21 +125,17 @@ async def test_validate_partially_supported_preserves_some_evidence() -> None:
         evidence_ids=[present_id, missing_id],
         support_status="supported",
     )
-    response = type(
-        "Response",
-        (),
-        {
-            "execution_run_id": uuid4(),
-            "answer": "Some claim.",
-            "status": "answered",
-            "claims": [claim],
-            "citations": [],
-            "confidence_band": "medium",
-            "warnings": [],
-        },
-    )()
+    response = QueryResponse(
+        execution_run_id=uuid4(),
+        answer="Some claim.",
+        status="answered",
+        claims=[claim],
+        citations=[],
+        confidence_band="medium",
+        warnings=[],
+    )
 
-    result = await validator.validate(response, [evidence])
+    result = await validator.validate(cast(QueryResponse, response), [evidence])
 
     assert len(result.claims) == 1
     assert result.claims[0].support_status == "partially_supported"

@@ -14,10 +14,10 @@ from groundgraph.application.ports import (
     GraphRepository,
     IndexVersionResolver,
     KeywordRetrieverPort,
-    RetrievalPlanner,
     VectorContentRetriever,
 )
 from groundgraph.application.retrieval.hybrid_retrieval import HybridRetrievalResult
+from groundgraph.application.retrieval.retrieval_planner import RetrievalPlanner
 from groundgraph.application.settings import Settings
 from groundgraph.domain.retrieval import AnswerClaim, Evidence, QueryResponse, RetrievalPlan
 from groundgraph.workflows.query_graph import (
@@ -68,7 +68,9 @@ class _FakeHybridSvc:
         tenant_id: str,
         index_name: str | None = None,
     ) -> QueryResponse:
-        return _FakeAnswerGenerator().generate("", [], _FakeRetrievalPlan())
+        return await _FakeAnswerGenerator().generate(
+            "", [], cast(RetrievalPlan, _FakeRetrievalPlan())
+        )
 
     async def query_with_evidence(
         self,
