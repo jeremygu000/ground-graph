@@ -113,44 +113,77 @@ class Chunker:
         if self._estimate_tokens(text) <= max_tokens:
             return [(text.strip(), section_start, self._last_line_of(text, section_start))]
 
-        protected_ranges = self._build_protected_ranges(content, section_start)
+        line_to_char = self._build_line_to_char_map(text)
+        protected = self._build_protected_ranges_char(content, section_start, line_to_char)
 
         chunks: list[tuple[str, int, int]] = []
         start = 0
         text_len = len(text)
 
         while start < text_len:
-            chunk_end = min(start + estimated_chars, text_len)
+            target = min(start + estimated_chars, text_len)
 
-            safe_end = self._find_safe_end(text, chunk_end, protected_ranges, start)
-            end = safe_end if safe_end is not None else chunk_end
+            safe_end = self._find_safe_end(text, target, protected, start)
+
+            end = safe_end if safe_end is not None else target
+
+            if end <= start:
+                end = min(start + 1, text_len)
 
             chunk_text = text[start:end].strip()
-            if chunk_text:
-                chunk_start_line = section_start + text[:start].count("\n")
-                chunk_end_line = section_start + text[:end].count("\n")
-                chunks.append((chunk_text, chunk_start_line, chunk_end_line))
+            if not chunk_text:
+                start = min(start + 1, text_len)
+                continue
+
+            chunk_start_line = section_start + text[:start].count("\n")
+            chunk_end_line = section_start + text[:end].count("\n") - 1
+            chunks.append((chunk_text, chunk_start_line, chunk_end_line))
 
             if end >= text_len:
                 break
-            start = max(end - overlap_chars, chunks[-1][1] if chunks else 0)
-            start = max(start, 0)
+
+            next_start = end - overlap_chars
+            if chunks:
+                prev_start_char = line_to_char.get(chunks[-1][1] - section_start + 1, 0)
+                next_start = max(next_start, prev_start_char + 1)
+
+            next_start = max(next_start, start + 1)
+            start = min(next_start, text_len)
 
         return chunks
 
-    def _build_protected_ranges(
-        self, content: ParsedContent, section_start: int
+    def _build_line_to_char_map(self, text: str) -> dict[int, int]:
+        line_to_char: dict[int, int] = {}
+        char_pos = 0
+        for line_idx, line in enumerate(text.splitlines(), start=1):
+            line_to_char[line_idx] = char_pos
+            char_pos += len(line) + 1
+        return line_to_char
+
+    def _build_protected_ranges_char(
+        self,
+        content: ParsedContent,
+        section_start: int,
+        line_to_char: dict[int, int],
     ) -> list[tuple[int, int]]:
         ranges: list[tuple[int, int]] = []
-        for cb_start, cb_end in content.code_blocks:
-            if self._ranges_overlap(cb_start, cb_end, section_start, section_start + 999999):
-                ranges.append((cb_start, cb_end))
-        for tb_start, tb_end in content.tables:
-            if self._ranges_overlap(tb_start, tb_end, section_start, section_start + 999999):
-                ranges.append((tb_start, tb_end))
-        for li_start, li_end in content.list_items:
-            if self._ranges_overlap(li_start, li_end, section_start, section_start + 999999):
-                ranges.append((li_start, li_end))
+        section_rel_start = 1
+
+        def add_ranges(items: list[tuple[int, int]]) -> None:
+            for item_start, item_end in items:
+                if self._ranges_overlap(
+                    item_start, item_end, section_rel_start, section_rel_start + 999999
+                ):
+                    rel_start = item_start - section_start + 1
+                    rel_end = item_end - section_start + 1
+                    char_start = line_to_char.get(rel_start, 0)
+                    char_end = line_to_char.get(rel_end, 0)
+                    if char_start < char_end:
+                        ranges.append((char_start, char_end))
+
+        add_ranges(content.code_blocks)
+        add_ranges(content.tables)
+        add_ranges(content.list_items)
         ranges.sort()
         return ranges
 
@@ -158,9 +191,9 @@ class Chunker:
         return a_start <= b_end and b_start <= a_end
 
     def _find_safe_end(
-        self, text: str, target: int, protected_ranges: list[tuple[int, int]], chunk_start: int
+        self, text: str, target: int, protected: list[tuple[int, int]], chunk_start: int
     ) -> int | None:
-        for p_start, p_end in protected_ranges:
+        for p_start, p_end in protected:
             if p_start > chunk_start and p_start < target:
                 return p_start
             if p_start <= chunk_start <= p_end and p_end > target:
