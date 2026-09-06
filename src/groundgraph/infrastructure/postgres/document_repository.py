@@ -223,6 +223,8 @@ class PostgresDocumentRepository(DocumentRepository):
             start_locator=chunk.start_locator,
             end_locator=chunk.end_locator,
             allowed_principals=chunk.allowed_principals,
+            chunker_version=chunk.chunker_version,
+            configuration_hash=chunk.configuration_hash,
         )
         self._session.add(model)
         await self._session.flush()
@@ -314,4 +316,6 @@ class PostgresDocumentRepository(DocumentRepository):
             start_locator=row.start_locator,
             end_locator=row.end_locator,
             allowed_principals=list(row.allowed_principals),
+            chunker_version=row.chunker_version or "v1",
+            configuration_hash=row.configuration_hash or "",
         )

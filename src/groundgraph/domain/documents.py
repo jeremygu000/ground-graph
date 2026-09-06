@@ -118,3 +118,5 @@ class Chunk(BaseModel):
     start_locator: str | None = None
     end_locator: str | None = None
     allowed_principals: list[str] = Field(default_factory=empty_str_list)
+    chunker_version: str = "v1"
+    configuration_hash: str = ""

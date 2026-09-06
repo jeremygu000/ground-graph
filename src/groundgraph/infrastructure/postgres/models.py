@@ -223,6 +223,12 @@ class Chunk(Base):
     allowed_principals: Mapped[list[str]] = mapped_column(
         ARRAY(String), nullable=False, default=list
     )
+    chunker_version: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="v1", server_default="v1"
+    )
+    configuration_hash: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="", server_default=""
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

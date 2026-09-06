@@ -9,18 +9,47 @@ from __future__ import annotations
 
 import hashlib
 import re
+from dataclasses import dataclass
 from uuid import UUID, uuid4
 
 from groundgraph.domain.documents import Chunk
 
 from .parsers import ParsedContent
 
-MAX_TOKENS = 512
-OVERLAP_TOKENS = 64
 TOKENS_PER_CHAR = 0.25
 
 
+@dataclass(frozen=True)
+class ChunkerConfig:
+    """Configuration for the document chunker.
+
+    The configuration hash is derived from these fields, enabling
+    identification of which chunker settings produced a given chunk.
+    """
+
+    max_tokens: int = 512
+    overlap_tokens: int = 64
+    version: str = "v1"
+
+    def __post_init__(self) -> None:
+        if self.max_tokens < 64:  # noqa: PLR2004
+            raise ValueError("max_tokens must be >= 64")
+        if self.overlap_tokens < 0:
+            raise ValueError("overlap_tokens must be >= 0")
+        if self.overlap_tokens > self.max_tokens:
+            raise ValueError("overlap_tokens must not exceed max_tokens")
+
+    @property
+    def configuration_hash(self) -> str:
+        """Deterministic hash of the configuration for chunk lineage."""
+        sig = f"{self.version}|{self.max_tokens}|{self.overlap_tokens}"
+        return hashlib.sha256(sig.encode()).hexdigest()[:16]
+
+
 class Chunker:
+    def __init__(self, config: ChunkerConfig | None = None) -> None:
+        self._config = config or ChunkerConfig()
+
     def chunk(
         self,
         content: ParsedContent,
@@ -36,8 +65,8 @@ class Chunker:
             sub_chunks = self._chunk_text(
                 section_body,
                 section_start_line,
-                max_tokens=MAX_TOKENS,
-                overlap_tokens=OVERLAP_TOKENS,
+                max_tokens=self._config.max_tokens,
+                overlap_tokens=self._config.overlap_tokens,
                 content=content,
             )
             for sub_body, sub_start, sub_end in sub_chunks:
@@ -54,6 +83,8 @@ class Chunker:
                         start_locator=self._locate(sub_start, sub_body),
                         end_locator=self._locate_end(sub_end, sub_body),
                         allowed_principals=allowed_principals,
+                        chunker_version=self._config.version,
+                        configuration_hash=self._config.configuration_hash,
                     )
                 )
                 ordinal += 1

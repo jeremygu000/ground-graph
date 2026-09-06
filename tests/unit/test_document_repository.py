@@ -225,6 +225,8 @@ async def test_document_repository_happy_paths() -> None:
         token_count=1,
         checksum="chunk-0",
         allowed_principals=["engineering"],
+        chunker_version="v1",
+        configuration_hash="default",
     )
 
     assert await repo.find_or_create_source(created_source) == created_source
