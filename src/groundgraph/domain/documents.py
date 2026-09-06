@@ -53,6 +53,7 @@ class ParsedDocument(BaseModel):
     document_id: UUID
     version_id: UUID
     source_id: UUID
+    source_locator: str
     title: str
     media_type: str
     checksum: str

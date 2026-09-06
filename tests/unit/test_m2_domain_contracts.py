@@ -62,6 +62,7 @@ class TestDocumentContracts:
             content="# Hello",
             metadata={"author": "test"},
             effective_at=datetime(2024, 1, 1, tzinfo=UTC),
+            source_locator="/test/locator",
         )
         data = doc.model_dump()
         restored = ParsedDocument.model_validate(data)
@@ -141,6 +142,7 @@ class TestDocumentContracts:
                 content="# Hello",
                 metadata={"blob": b"raw"},
                 effective_at=datetime(2024, 1, 1, tzinfo=UTC),
+                source_locator="/test/locator",
             )
 
 

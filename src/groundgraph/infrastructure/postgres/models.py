@@ -113,6 +113,7 @@ class Document(Base):
     source_id: Mapped[UUID] = mapped_column(
         PG_UUID, ForeignKey("sources.source_id", ondelete="CASCADE"), nullable=False
     )
+    source_locator: Mapped[str] = mapped_column(Text, nullable=False)
     title: Mapped[str] = mapped_column(Text, nullable=False)
     media_type: Mapped[str] = mapped_column(String(100), nullable=False)
     current_version_id: Mapped[UUID | None] = mapped_column(PG_UUID, nullable=True)
@@ -136,6 +137,11 @@ class Document(Base):
     )
 
     __table_args__ = (
+        UniqueConstraint(
+            "source_id",
+            "source_locator",
+            name="uq_documents_source_locator",
+        ),
         ForeignKeyConstraint(
             ["document_id", "current_version_id"],
             ["document_versions.document_id", "document_versions.version_id"],

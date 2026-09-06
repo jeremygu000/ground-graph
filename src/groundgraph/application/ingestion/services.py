@@ -78,6 +78,7 @@ class IngestionService:
                 document_id=document_id,
                 version_id=version_id,
                 source_id=source_id,
+                source_locator=canonical_locator,
                 title=parsed.title,
                 media_type=media_type,
                 checksum=checksum,
@@ -89,7 +90,8 @@ class IngestionService:
                 },
                 effective_at=datetime.now(UTC),
             )
-            await uow.documents.create_document(document)
+            _, created = await uow.documents.upsert_document(document)
+            new_version = created
 
             chunks = self._chunker.chunk(
                 content=parsed,

@@ -6,6 +6,7 @@ from uuid import UUID
 
 from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import IntegrityError
 
 from groundgraph.application.ports import DocumentRepository
 from groundgraph.domain.documents import Chunk, ParsedDocument, SourceDescriptor
@@ -30,6 +31,23 @@ class PostgresDocumentRepository(DocumentRepository):
         self._session = session
 
     async def find_or_create_source(self, source: SourceDescriptor) -> SourceDescriptor:
+        stmt = (
+            pg_insert(SourceModel)
+            .values(
+                source_id=source.source_id,
+                source_type=source.source_type,
+                uri=source.uri,
+                classification=source.classification,
+                tenant_id=source.tenant_id,
+                allowed_principals=source.allowed_principals,
+            )
+            .on_conflict_do_nothing(index_elements=["tenant_id", "source_type", "uri"])
+            .returning(SourceModel)
+        )
+        result = await self._session.execute(stmt)
+        row = result.scalar_one_or_none()
+        if row is not None:
+            return self._source_to_domain(row)
         result = await self._session.execute(
             select(SourceModel).where(
                 SourceModel.tenant_id == source.tenant_id,
@@ -37,20 +55,8 @@ class PostgresDocumentRepository(DocumentRepository):
                 SourceModel.uri == source.uri,
             )
         )
-        existing = result.scalar_one_or_none()
-        if existing is not None:
-            return self._source_to_domain(existing)
-        model = SourceModel(
-            source_id=source.source_id,
-            source_type=source.source_type,
-            uri=source.uri,
-            classification=source.classification,
-            tenant_id=source.tenant_id,
-            allowed_principals=source.allowed_principals,
-        )
-        self._session.add(model)
-        await self._session.flush()
-        return source
+        existing = result.scalar_one()
+        return self._source_to_domain(existing)
 
     async def get_source(self, source_id: UUID) -> SourceDescriptor | None:
         result = await self._session.execute(
@@ -67,52 +73,72 @@ class PostgresDocumentRepository(DocumentRepository):
         self, source_id: UUID, canonical_locator: str
     ) -> tuple[UUID, UUID] | None:
         result = await self._session.execute(
-            select(DocumentModel)
-            .where(DocumentModel.source_id == source_id)
-            .order_by(DocumentModel.created_at.desc())
-        )
-        for doc_row in result.scalars().all():
-            version_row = await self._get_current_version(
-                doc_row.document_id, doc_row.current_version_id
+            select(DocumentModel).where(
+                DocumentModel.source_id == source_id,
+                DocumentModel.source_locator == canonical_locator,
             )
-            if version_row is None:
-                continue
-            metadata = dict(version_row.doc_metadata) if version_row.doc_metadata else {}
-            if metadata.get("canonical_locator") == canonical_locator:
-                return (doc_row.document_id, version_row.version_id)
-        return None
-
-    async def create_document(self, document: ParsedDocument) -> ParsedDocument:
-        existing = await self._session.execute(
-            select(DocumentModel).where(DocumentModel.document_id == document.document_id)
         )
-        current_document = existing.scalar_one_or_none()
-        if current_document and current_document.current_version_id is not None:
+        doc = result.scalar_one_or_none()
+        if doc is None or doc.current_version_id is None:
+            return None
+        return (doc.document_id, doc.current_version_id)
+
+    async def upsert_document(self, document: ParsedDocument) -> tuple[ParsedDocument, bool]:
+        result = await self._session.execute(
+            select(DocumentModel).where(
+                DocumentModel.source_id == document.source_id,
+                DocumentModel.source_locator == document.source_locator,
+            )
+        )
+        existing_doc = result.scalar_one_or_none()
+        is_new = existing_doc is None
+
+        if is_new:
+            try:
+                await self._session.execute(
+                    pg_insert(DocumentModel).values(
+                        document_id=document.document_id,
+                        source_id=document.source_id,
+                        source_locator=document.source_locator,
+                        title=document.title,
+                        media_type=document.media_type,
+                        current_version_id=document.version_id,
+                    )
+                )
+            except IntegrityError:
+                await self._session.rollback()
+                result = await self._session.execute(
+                    select(DocumentModel).where(
+                        DocumentModel.source_id == document.source_id,
+                        DocumentModel.source_locator == document.source_locator,
+                    )
+                )
+                existing_doc = result.scalar_one_or_none()
+                is_new = False
+        else:
+            await self._session.execute(
+                update(DocumentModel)
+                .where(
+                    DocumentModel.source_id == document.source_id,
+                    DocumentModel.source_locator == document.source_locator,
+                )
+                .values(
+                    current_version_id=document.version_id,
+                    title=document.title,
+                    media_type=document.media_type,
+                )
+            )
+
+        if not is_new:
             await self._session.execute(
                 update(DocumentVersionModel)
-                .where(DocumentVersionModel.version_id == current_document.current_version_id)
-                .where(DocumentVersionModel.document_id == document.document_id)
+                .where(
+                    DocumentVersionModel.document_id == document.document_id,
+                    DocumentVersionModel.version_id != document.version_id,
+                )
                 .values(is_current=False)
             )
-        doc_stmt = (
-            pg_insert(DocumentModel)
-            .values(
-                document_id=document.document_id,
-                source_id=document.source_id,
-                title=document.title,
-                media_type=document.media_type,
-                current_version_id=document.version_id,
-            )
-            .on_conflict_do_update(
-                index_elements=["document_id"],
-                set_={
-                    "source_id": document.source_id,
-                    "title": document.title,
-                    "media_type": document.media_type,
-                    "current_version_id": document.version_id,
-                },
-            )
-        )
+
         version = DocumentVersionModel(
             version_id=document.version_id,
             document_id=document.document_id,
@@ -122,10 +148,13 @@ class PostgresDocumentRepository(DocumentRepository):
             effective_at=document.effective_at,
             is_current=True,
         )
-        await self._session.execute(doc_stmt)
         self._session.add(version)
         await self._session.flush()
-        return document
+        return (document, is_new)
+
+    async def create_document(self, document: ParsedDocument) -> ParsedDocument:
+        doc, _ = await self.upsert_document(document)
+        return doc
 
     async def get_document(self, document_id: UUID) -> ParsedDocument | None:
         result = await self._session.execute(
@@ -258,6 +287,7 @@ class PostgresDocumentRepository(DocumentRepository):
             document_id=document.document_id,
             version_id=version.version_id,
             source_id=document.source_id,
+            source_locator=document.source_locator,
             title=document.title,
             media_type=document.media_type,
             checksum=version.checksum,

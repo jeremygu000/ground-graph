@@ -124,6 +124,7 @@ async def test_document_repository_crud(postgres_component: Any) -> None:
             content="# Hello",
             metadata={"author": "test"},
             effective_at=datetime(2024, 1, 1, tzinfo=UTC),
+            source_locator="/test/locator",
         )
         await repo.create_document(document)
         chunk = Chunk(
@@ -232,6 +233,7 @@ async def test_document_current_version_fallback_and_delete(
             content="# Fallback",
             metadata={"author": "test"},
             effective_at=datetime(2024, 1, 1, tzinfo=UTC),
+            source_locator="/test/locator",
         )
         await repo.create_document(document)
         await session.commit()
@@ -302,6 +304,7 @@ async def test_document_version_lifecycle_and_delete(postgres_component: Any) ->
             content="# v1",
             metadata={"revision": 1},
             effective_at=datetime(2024, 1, 1, tzinfo=UTC),
+            source_locator="/test/locator",
         )
         second = ParsedDocument(
             document_id=document_id,
@@ -313,6 +316,7 @@ async def test_document_version_lifecycle_and_delete(postgres_component: Any) ->
             content="# v2",
             metadata={"revision": 2},
             effective_at=datetime(2024, 1, 2, tzinfo=UTC),
+            source_locator="/test/locator",
         )
 
         await repo.create_document(first)
@@ -381,6 +385,7 @@ async def test_document_current_version_must_belong_to_same_document(
             content="# A",
             metadata={"revision": 1},
             effective_at=datetime(2024, 1, 1, tzinfo=UTC),
+            source_locator="/test/locator_a",
         )
         doc_b = ParsedDocument(
             document_id=uuid4(),
@@ -392,6 +397,7 @@ async def test_document_current_version_must_belong_to_same_document(
             content="# B",
             metadata={"revision": 1},
             effective_at=datetime(2024, 1, 2, tzinfo=UTC),
+            source_locator="/test/locator_b",
         )
         await repo.create_document(doc_a)
         await repo.create_document(doc_b)
@@ -437,6 +443,7 @@ async def test_chunk_lifecycle_and_listing(postgres_component: Any) -> None:
             content="# Chunked",
             metadata={"author": "test"},
             effective_at=datetime(2024, 1, 1, tzinfo=UTC),
+            source_locator="/test/locator",
         )
         await repo.create_document(document)
 
@@ -504,6 +511,7 @@ async def test_chunk_version_must_belong_to_same_document(postgres_component: An
             content="# A",
             metadata={"revision": 1},
             effective_at=datetime(2024, 1, 1, tzinfo=UTC),
+            source_locator="/test/locator_a",
         )
         doc_b = ParsedDocument(
             document_id=uuid4(),
@@ -515,6 +523,7 @@ async def test_chunk_version_must_belong_to_same_document(postgres_component: An
             content="# B",
             metadata={"revision": 1},
             effective_at=datetime(2024, 1, 2, tzinfo=UTC),
+            source_locator="/test/locator_b",
         )
         await repo.create_document(doc_a)
         await repo.create_document(doc_b)
@@ -561,6 +570,7 @@ async def test_document_version_cascade(postgres_component: Any) -> None:
             source_id=source.source_id,
             title="Test Doc",
             media_type="text/markdown",
+            source_locator="/test/locator",
         )
         session.add(doc)
         await session.flush()
@@ -617,6 +627,7 @@ async def test_postgres_uow_rolls_back_document_and_outbox(postgres_component: A
                     content="# rollback",
                     metadata={"revision": 1},
                     effective_at=datetime(2024, 1, 1, tzinfo=UTC),
+                    source_locator="/test/locator",
                 )
                 await docs.create_document(document)
 

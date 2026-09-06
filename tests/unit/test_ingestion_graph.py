@@ -64,12 +64,19 @@ class _FakeDocumentRepository:
             if doc.document_id == document_id and doc.version_id == version_id:
                 override = self._checksum_override.get((document_id, version_id))
                 if override:
-                    return ParsedDocument(**{**doc.model_dump(), "checksum": override})
+                    return ParsedDocument(
+                        **{
+                            **doc.model_dump(),
+                            "checksum": override,
+                            "source_locator": "/test/source_locator",
+                        }
+                    )
                 return doc
         return None
 
-    async def create_document(self, doc: ParsedDocument) -> None:
+    async def upsert_document(self, doc: ParsedDocument) -> tuple[ParsedDocument, bool]:
         self.documents.append(doc)
+        return (doc, True)
 
     async def create_chunk(self, chunk: Chunk) -> None:
         self.chunks.append(chunk)

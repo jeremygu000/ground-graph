@@ -34,6 +34,9 @@ class _Result:
     def scalar_one_or_none(self) -> object | None:
         return self.row
 
+    def scalar_one(self) -> object:
+        return self.row
+
     def scalars(self) -> _Result:
         return self
 
@@ -77,6 +80,7 @@ def _document_model(
     source_id: UUID,
     *,
     current_version_id: UUID | None,
+    source_locator: str = "/test/locator",
 ) -> SqlDocument:
     return SqlDocument(
         document_id=document_id,
@@ -84,6 +88,7 @@ def _document_model(
         title="Doc",
         media_type="text/markdown",
         current_version_id=current_version_id,
+        source_locator=source_locator,
     )
 
 
@@ -168,21 +173,22 @@ async def test_document_repository_happy_paths() -> None:
 
     session = _Session(
         responses=[
-            _Result(row=None),  # 0: find_or_create_source SELECT (source not found)
-            _Result(),  # 1: create_document existing lookup
-            _Result(),  # 2: create_document upsert
-            _Result(row=source_row),  # 3: get_source
-            _Result(rows=[source_row, _source_model(uuid4(), "/docs/b")]),  # 4: list_sources
-            _Result(row=document_row),  # 5: get_document
-            _Result(row=version_row),  # 6: get_document_version
-            _Result(row=document_row),  # 7: get_document
-            _Result(row=version_row),  # 8: get_document_version
-            _Result(row=document_row),  # 9: get_document
-            _Result(rows=[version_row, older_version_row]),  # 10: list_document_versions
-            _Result(row=chunk_row),  # 11: get_chunk
-            _Result(rows=[chunk_row, later_chunk_row]),  # 12: list_chunks
-            _Result(),  # 13: delete_document (versions)
+            _Result(row=None),  # 0: find_or_create_source first SELECT (source not found)
+            _Result(row=source_row),  # 1: find_or_create_source second SELECT
+            _Result(row=None),  # 2: upsert_document SELECT (new doc, no existing)
+            _Result(),  # 3: upsert_document version insert
+            _Result(row=source_row),  # 4: get_source
+            _Result(rows=[source_row, _source_model(uuid4(), "/docs/b")]),  # 5: list_sources
+            _Result(row=document_row),  # 6: get_document
+            _Result(row=version_row),  # 7: get_document_version
+            _Result(row=document_row),  # 8: get_document
+            _Result(row=version_row),  # 9: get_document_version
+            _Result(row=document_row),  # 10: get_document
+            _Result(rows=[version_row, older_version_row]),  # 11: list_document_versions
+            _Result(row=chunk_row),  # 12: get_chunk
+            _Result(rows=[chunk_row, later_chunk_row]),  # 13: list_chunks
             _Result(),  # 14: delete_document (versions)
+            _Result(),  # 15: delete_document (versions)
         ]
     )
     repo = PostgresDocumentRepository(cast(Any, session))
@@ -205,6 +211,7 @@ async def test_document_repository_happy_paths() -> None:
         content="# Hello",
         metadata={"author": "test"},
         effective_at=datetime(2024, 1, 1, tzinfo=UTC),
+        source_locator="/test/locator",
     )
     created_chunk = Chunk(
         chunk_id=chunk_id,
@@ -219,7 +226,9 @@ async def test_document_repository_happy_paths() -> None:
     )
 
     assert await repo.find_or_create_source(created_source) == created_source
-    assert await repo.create_document(created_document) == created_document
+    doc, is_new = await repo.upsert_document(created_document)
+    assert is_new is True
+    assert doc == created_document
     assert await repo.create_chunk(created_chunk) == created_chunk
 
     loaded_source = await repo.get_source(source_id)
@@ -253,9 +262,9 @@ async def test_document_repository_happy_paths() -> None:
 
     await repo.delete_document(document_id)
 
-    assert session.flushed == 3
-    assert len(session.added) == 3
-    assert len(session.executed) == 15
+    assert session.flushed == 2
+    assert len(session.added) == 2
+    assert len(session.executed) == 16
 
 
 @pytest.mark.asyncio
@@ -320,24 +329,35 @@ async def test_document_repository_missing_rows_return_none_or_empty() -> None:
 
 @pytest.mark.asyncio
 async def test_document_repository_rejects_mutated_metadata() -> None:
-    session = _Session()
+    doc_id = uuid4()
+    ver_id = uuid4()
+    src_id = uuid4()
+    document_row = _document_model(
+        doc_id, src_id, current_version_id=ver_id, source_locator="/test/locator"
+    )
+    session = _Session(
+        responses=[
+            _Result(row=document_row),  # upsert_document conflict_stmt returning
+        ]
+    )
     repo = PostgresDocumentRepository(cast(Any, session))
     metadata: dict[str, object] = {"ok": {"nested": "value"}}
     document = ParsedDocument(
-        document_id=uuid4(),
-        version_id=uuid4(),
-        source_id=uuid4(),
+        document_id=doc_id,
+        version_id=ver_id,
+        source_id=src_id,
         title="Doc",
         media_type="text/markdown",
         checksum="abc123",
         content="# Hello",
         metadata=metadata,
         effective_at=datetime(2024, 1, 1, tzinfo=UTC),
+        source_locator="/test/locator",
     )
     cast(dict[str, object], document.metadata["ok"])["blob"] = b"raw"
 
     with pytest.raises(ValueError, match="JsonValue"):
-        await repo.create_document(document)
+        await repo.upsert_document(document)
 
     assert session.added == []
     assert session.flushed == 0

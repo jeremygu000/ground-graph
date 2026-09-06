@@ -37,6 +37,7 @@ class _FakeDocumentRepository:
         self.sources: dict[str, SourceDescriptor] = {}
         self._find_result: tuple[Any, Any] | None = None
         self._checksum_override: dict[tuple[Any, Any], str] = {}
+        self._versions: dict[tuple[Any, Any], ParsedDocument] = {}
 
     def set_source(self, source: SourceDescriptor) -> None:
         self.sources[str(source.source_id)] = source
@@ -69,16 +70,34 @@ class _FakeDocumentRepository:
     async def get_document_version(
         self, document_id: Any, version_id: Any
     ) -> ParsedDocument | None:
+        key = (document_id, version_id)
+        if key in self._versions:
+            doc = self._versions[key]
+            override = self._checksum_override.get(key)
+            if override:
+                return ParsedDocument(**{**doc.model_dump(), "checksum": override})
+            return doc
         for doc in self.documents:
             if doc.document_id == document_id and doc.version_id == version_id:
-                override = self._checksum_override.get((document_id, version_id))
+                self._versions[key] = doc
+                override = self._checksum_override.get(key)
                 if override:
                     return ParsedDocument(**{**doc.model_dump(), "checksum": override})
                 return doc
         return None
 
-    async def create_document(self, doc: ParsedDocument) -> None:
+    async def upsert_document(self, doc: ParsedDocument) -> tuple[ParsedDocument, bool]:
+        for i, existing in enumerate(self.documents):
+            if (
+                existing.source_id == doc.source_id
+                and existing.source_locator == doc.source_locator
+            ):
+                self.documents[i] = doc
+                self._versions[(doc.document_id, doc.version_id)] = doc
+                return (doc, False)
         self.documents.append(doc)
+        self._versions[(doc.document_id, doc.version_id)] = doc
+        return (doc, True)
 
     async def create_chunk(self, chunk: Chunk) -> None:
         self.chunks.append(chunk)
@@ -304,7 +323,8 @@ class TestIngestionService:
         assert result2.document_id == result1.document_id
         assert result2.version_id != result1.version_id
         assert result2.created_new_version is True
-        assert len(self.fake_docs.documents) == 2
+        assert len(self.fake_docs.documents) == 1
+        assert len(self.fake_docs._versions) == 2
         assert len(self.fake_outbox.events) == 2
 
     async def test_ingest_file_path_escape_rejected(self, tmp_path: Any) -> None:
