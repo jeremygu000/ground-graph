@@ -6,6 +6,7 @@ Pure Pydantic v2 — no infrastructure imports.
 from __future__ import annotations
 
 from datetime import datetime
+from enum import StrEnum
 from typing import Literal
 from uuid import UUID
 
@@ -65,6 +66,32 @@ class ParsedDocument(BaseModel):
     @classmethod
     def _validate_metadata(cls, value: object) -> object:
         return validate_json_value(value)
+
+
+class IngestionCheckpointStatus(StrEnum):
+    PERSISTED = "PERSISTED"
+    FAILED = "FAILED"
+
+
+class IngestionCheckpoint(BaseModel):
+    """Durable checkpoint tracking ingestion progress for resumable ingestion.
+
+    Enables "failure resumes without duplicating completed data" (plan.md §6.3).
+    Key is (source_id, content_checksum) — one checkpoint per source+content.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    checkpoint_id: UUID
+    source_id: UUID
+    content_checksum: str
+    status: IngestionCheckpointStatus
+    document_id: UUID | None = None
+    version_id: UUID | None = None
+    error_message: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    completed_at: datetime | None = None
 
 
 class Chunk(BaseModel):

@@ -672,3 +672,34 @@ class HumanReviewItem(Base):
         Index("ix_human_review_items_run_id", "run_id"),
         Index("ix_human_review_items_decision", "decision"),
     )
+
+
+class IngestionCheckpoint(Base):
+    __tablename__ = "ingestion_checkpoints"
+
+    checkpoint_id: Mapped[UUID] = mapped_column(PG_UUID, primary_key=True, default=_gen_uuid)
+    source_id: Mapped[UUID] = mapped_column(
+        PG_UUID, ForeignKey("sources.source_id", ondelete="CASCADE"), nullable=False
+    )
+    content_checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(50), nullable=False)
+    document_id: Mapped[UUID | None] = mapped_column(PG_UUID, nullable=True)
+    version_id: Mapped[UUID | None] = mapped_column(PG_UUID, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=_utcnow
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "source_id",
+            "content_checksum",
+            name="uq_ingestion_checkpoints_source_checksum",
+        ),
+        Index("ix_ingestion_checkpoints_source_id", "source_id"),
+        Index("ix_ingestion_checkpoints_status", "status"),
+    )

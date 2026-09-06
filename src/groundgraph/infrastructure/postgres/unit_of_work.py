@@ -11,6 +11,9 @@ from groundgraph.infrastructure.postgres.document_repository import (
     PostgresDocumentRepository,
 )
 from groundgraph.infrastructure.postgres.execution_store import ExecutionRepository
+from groundgraph.infrastructure.postgres.ingestion_checkpoint_repository import (
+    PostgresIngestionCheckpointRepository,
+)
 from groundgraph.infrastructure.postgres.outbox_repository import PostgresOutboxRepository
 from groundgraph.infrastructure.postgres.session import PostgresSession
 
@@ -27,12 +30,14 @@ class PostgresUnitOfWork:
         self.documents: PostgresDocumentRepository | None = None
         self.outbox: PostgresOutboxRepository | None = None
         self.execution: ExecutionRepository | None = None
+        self.ingestion_checkpoint: PostgresIngestionCheckpointRepository | None = None
 
     async def __aenter__(self) -> Self:
         self._session = cast(PostgresSession, self._session_factory())
         self.documents = PostgresDocumentRepository(self._session)
         self.outbox = PostgresOutboxRepository(self._session)
         self.execution = ExecutionRepository(self._session)
+        self.ingestion_checkpoint = PostgresIngestionCheckpointRepository(self._session)
         return self
 
     async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:

@@ -11,7 +11,11 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 from groundgraph.application.ports import IngestionUnitOfWork, ObjectStore
-from groundgraph.domain.documents import ParsedDocument, SourceDescriptor
+from groundgraph.domain.documents import (
+    IngestionCheckpointStatus,
+    ParsedDocument,
+    SourceDescriptor,
+)
 from groundgraph.domain.evidence import OutboxEvent, OutboxEventType
 
 from .chunker import Chunker
@@ -51,11 +55,20 @@ class IngestionService:
         if not await self._object_store.exists(raw_key):
             await self._object_store.put_raw(raw_key, raw_bytes, media_type)
 
-        document_id: UUID
-        version_id: UUID
-        new_version = False
-
         async with self._uow_factory() as uow:
+            checkpoint = await uow.ingestion_checkpoint.get_checkpoint(source_id, checksum)
+            if checkpoint is not None and checkpoint.status == IngestionCheckpointStatus.PERSISTED:
+                assert checkpoint.document_id is not None
+                assert checkpoint.version_id is not None
+                existing_doc = await uow.documents.get_document(checkpoint.document_id)
+                if existing_doc is not None:
+                    return IngestionResult(
+                        document_id=checkpoint.document_id,
+                        version_id=checkpoint.version_id,
+                        created_new_version=False,
+                        tenant_id=source.tenant_id,
+                    )
+
             existing = await uow.documents.find_active_document_by_canonical_locator(
                 source_id, canonical_locator
             )
@@ -63,15 +76,31 @@ class IngestionService:
                 doc_id, ver_id = existing
                 current = await uow.documents.get_document_version(doc_id, ver_id)
                 if current is not None and current.checksum == checksum:
-                    return IngestionResult(
+                    result = IngestionResult(
                         document_id=doc_id,
                         version_id=ver_id,
                         created_new_version=False,
                         tenant_id=source.tenant_id,
                     )
+                    await uow.ingestion_checkpoint.upsert_checkpoint(
+                        source_id=source_id,
+                        content_checksum=checksum,
+                        status=IngestionCheckpointStatus.PERSISTED,
+                        document_id=doc_id,
+                        version_id=ver_id,
+                    )
+                    return result
                 document_id, version_id = doc_id, uuid4()
             else:
                 document_id, version_id = uuid4(), uuid4()
+
+            await uow.ingestion_checkpoint.upsert_checkpoint(
+                source_id=source_id,
+                content_checksum=checksum,
+                status=IngestionCheckpointStatus.PERSISTED,
+                document_id=document_id,
+                version_id=version_id,
+            )
 
             parsed = self._parse(raw_bytes, media_type)
 
@@ -91,8 +120,7 @@ class IngestionService:
                 },
                 effective_at=datetime.now(UTC),
             )
-            _, created = await uow.documents.upsert_document(document)
-            new_version = created
+            _, _ = await uow.documents.upsert_document(document)
 
             chunks = self._chunker.chunk(
                 content=parsed,
@@ -117,12 +145,11 @@ class IngestionService:
                 created_at=datetime.now(UTC),
             )
             await uow.outbox.add(event)
-            new_version = True
 
         return IngestionResult(
             document_id=document_id,
             version_id=version_id,
-            created_new_version=new_version,
+            created_new_version=True,
             tenant_id=source.tenant_id,
         )
 

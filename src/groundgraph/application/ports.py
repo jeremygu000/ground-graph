@@ -12,7 +12,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Protocol, Self, TypeVar
 
-from groundgraph.domain.documents import Chunk, ParsedDocument, SourceDescriptor
+from groundgraph.domain.documents import (
+    Chunk,
+    IngestionCheckpoint,
+    IngestionCheckpointStatus,
+    ParsedDocument,
+    SourceDescriptor,
+)
 from groundgraph.domain.evidence import OutboxEvent
 from groundgraph.domain.execution import ExecutionRun, ExecutionStep
 from groundgraph.domain.knowledge import CanonicalEntity, EntityMention, KnowledgeFact
@@ -78,6 +84,7 @@ class IngestionUnitOfWork(Protocol):
 
     documents: DocumentRepository
     outbox: OutboxRepository
+    ingestion_checkpoint: IngestionCheckpointRepository
 
     async def __aenter__(self) -> Self: ...
 
@@ -98,6 +105,24 @@ class ObjectStore(Protocol):
     async def delete_raw(self, key: str) -> None: ...
 
     async def exists(self, key: str) -> bool: ...
+
+
+class IngestionCheckpointRepository(Protocol):
+    """Port for durable ingestion checkpoint state (plan.md §6.3)."""
+
+    async def upsert_checkpoint(  # noqa: PLR0917
+        self,
+        source_id: UUID,
+        content_checksum: str,
+        status: IngestionCheckpointStatus,
+        document_id: UUID | None = None,
+        version_id: UUID | None = None,
+        error_message: str | None = None,
+    ) -> IngestionCheckpoint: ...
+
+    async def get_checkpoint(
+        self, source_id: UUID, content_checksum: str
+    ) -> IngestionCheckpoint | None: ...
 
 
 class EmbeddingProvider(Protocol):

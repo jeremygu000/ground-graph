@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
 from groundgraph.application.ingestion.chunker import Chunker
 from groundgraph.application.ingestion.services import IngestionService
-from groundgraph.domain.documents import Chunk, ParsedDocument, SourceDescriptor
+from groundgraph.domain.documents import (
+    Chunk,
+    IngestionCheckpoint,
+    IngestionCheckpointStatus,
+    ParsedDocument,
+    SourceDescriptor,
+)
 from groundgraph.domain.evidence import OutboxEvent
 from groundgraph.workflows.ingestion_graph import IngestionState, IngestionWorkflow
 
@@ -86,11 +93,60 @@ class _FakeDocumentRepository:
     async def create_chunk(self, chunk: Chunk) -> None:
         self.chunks.append(chunk)
 
+    async def get_document(self, document_id: Any) -> ParsedDocument | None:
+        for doc in self.documents:
+            if doc.document_id == document_id:
+                return doc
+        return None
+
+
+class _FakeIngestionCheckpointRepository:
+    def __init__(self) -> None:
+        self._checkpoints: dict[tuple[str, str], IngestionCheckpoint] = {}
+
+    async def upsert_checkpoint(  # noqa: PLR0917
+        self,
+        source_id: Any,
+        content_checksum: str,
+        status: IngestionCheckpointStatus,
+        document_id: Any | None = None,
+        version_id: Any | None = None,
+        error_message: str | None = None,
+    ) -> IngestionCheckpoint:
+        now = datetime.now(UTC)
+        key = (str(source_id), content_checksum)
+        self._checkpoints[key] = IngestionCheckpoint(
+            checkpoint_id=uuid4(),
+            source_id=source_id,
+            content_checksum=content_checksum,
+            status=status,
+            document_id=document_id,
+            version_id=version_id,
+            error_message=error_message,
+            created_at=now,
+            updated_at=now,
+            completed_at=now
+            if status in (IngestionCheckpointStatus.PERSISTED, IngestionCheckpointStatus.FAILED)
+            else None,
+        )
+        return self._checkpoints[key]
+
+    async def get_checkpoint(
+        self, source_id: Any, content_checksum: str
+    ) -> IngestionCheckpoint | None:
+        return self._checkpoints.get((str(source_id), content_checksum))
+
 
 class _FakeIngestionUoW:
-    def __init__(self, docs: _FakeDocumentRepository, outbox: _FakeOutboxRepository) -> None:
+    def __init__(
+        self,
+        docs: _FakeDocumentRepository,
+        outbox: _FakeOutboxRepository,
+        checkpoint: _FakeIngestionCheckpointRepository,
+    ) -> None:
         self.documents = docs
         self.outbox = outbox
+        self.ingestion_checkpoint = checkpoint
 
     async def __aenter__(self) -> Any:
         return self
@@ -108,10 +164,11 @@ class _FakeIngestionUoW:
 def _build_workflow() -> tuple[IngestionWorkflow, _FakeDocumentRepository, _FakeOutboxRepository]:
     docs = _FakeDocumentRepository()
     outbox = _FakeOutboxRepository()
+    checkpoint = _FakeIngestionCheckpointRepository()
     store: Any = _FakeObjectStore()
 
     def uow_factory() -> Any:
-        return _FakeIngestionUoW(docs, outbox)
+        return _FakeIngestionUoW(docs, outbox, checkpoint)
 
     service = IngestionService(uow_factory=uow_factory, object_store=store, chunker=Chunker())
     workflow = IngestionWorkflow(ingestion_service=service)
