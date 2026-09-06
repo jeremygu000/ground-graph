@@ -11,7 +11,9 @@ from groundgraph.application.ingestion.parsers import (
     MarkdownParser,
     ParserRegistry,
     PdfParser,
+    PyParser,
     TextParser,
+    TsParser,
     UnsupportedFormatError,
     UnsupportedReason,
 )
@@ -166,6 +168,52 @@ class TestEpubParser:
         with pytest.raises(UnsupportedFormatError) as exc_info:
             EpubParser().parse(content)
         assert exc_info.value.reason == UnsupportedReason.EPUB_PARSE_ERROR
+
+
+class TestPyParser:
+    def test_parses_python_file(self) -> None:
+        content = b"def hello():\n    print('world')\n"
+        result = PyParser().parse(content)
+        assert result.title == "def hello"
+        assert result.body == "def hello():\n    print('world')\n"
+        assert result.media_type == "text/x-python"
+        assert (1, "def hello") in result.headings
+
+    def test_extracts_class_definition(self) -> None:
+        content = b"class MyClass:\n    def method(self):\n        pass\n"
+        result = PyParser().parse(content)
+        assert result.title == "class MyClass"
+        assert (1, "class MyClass") in result.headings
+
+    def test_parses_empty_python(self) -> None:
+        content = b""
+        result = PyParser().parse(content)
+        assert result.title == "untitled"
+        assert result.body == ""
+
+
+class TestTsParser:
+    def test_parses_typescript_file(self) -> None:
+        content = b"function greet(name: string): void {\n  console.log(name);\n}\n"
+        result = TsParser().parse(content)
+        assert result.title == "function greet"
+        assert result.body == "function greet(name: string): void {\n  console.log(name);\n}\n"
+        assert result.media_type == "text/typescript"
+        assert (1, "function greet") in result.headings
+
+    def test_extracts_class_and_interface(self) -> None:
+        content = b"interface Config {\n  key: string;\n}\nexport class Service {\n  run() {}\n}\n"
+        result = TsParser().parse(content)
+        assert result.title == "interface Config"
+        headings_titles = [h[1] for h in result.headings]
+        assert "interface Config" in headings_titles
+        assert "export class Service" in headings_titles
+
+    def test_parses_empty_typescript(self) -> None:
+        content = b""
+        result = TsParser().parse(content)
+        assert result.title == "untitled"
+        assert result.body == ""
 
 
 class TestParserRegistry:

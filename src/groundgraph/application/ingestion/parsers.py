@@ -597,6 +597,168 @@ class ParserRegistry:
         return parser
 
 
+class PyParser(BaseParser):
+    @property
+    def media_type(self) -> str:
+        return "text/x-python"
+
+    def parse(self, content: bytes) -> ParsedContent:
+        text = content.decode("utf-8", errors="replace")
+        lines = text.splitlines()
+        title = self._title_from_definitions(lines) or self._title_from_filename(text) or "untitled"
+        headings = self._extract_headings_from_code(lines)
+        code_blocks = self._extract_code_blocks(text)
+        return ParsedContent(
+            title=title,
+            body=text,
+            media_type=self.media_type,
+            metadata={"language": "python", "line_count": len(lines)},
+            headings=headings,
+            code_blocks=code_blocks,
+        )
+
+    def _title_from_definitions(self, lines: list[str]) -> str | None:
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("class ") and ":" in stripped:
+                name = stripped.split("class ", 1)[1].split("(")[0].split(":")[0].strip()
+                return f"class {name}"
+            if stripped.startswith("def ") and "(" in stripped:
+                name = stripped.split("def ", 1)[1].split("(")[0].strip()
+                return f"def {name}"
+            if stripped.startswith("async def ") and "(" in stripped:
+                name = stripped.split("async def ", 1)[1].split("(")[0].strip()
+                return f"async def {name}"
+        return None
+
+    def _title_from_filename(self, text: str) -> str | None:
+        first_line = text.split("\n", maxsplit=1)[0].strip()
+        if first_line.startswith("# ") or first_line.startswith("#!"):
+            return first_line[2:120].strip() or None
+        return None
+
+    def _extract_headings_from_code(self, lines: list[str]) -> list[tuple[int, str]]:
+        headings: list[tuple[int, str]] = []
+        for i, line in enumerate(lines, 1):
+            stripped = line.strip()
+            if stripped.startswith("class ") and ":" in stripped:
+                name = stripped.split("class ", 1)[1].split("(")[0].split(":")[0].strip()
+                headings.append((i, f"class {name}"))
+            elif stripped.startswith("def ") and "(" in stripped:
+                name = stripped.split("def ", 1)[1].split("(")[0].strip()
+                headings.append((i, f"def {name}"))
+            elif stripped.startswith("async def ") and "(" in stripped:
+                name = stripped.split("async def ", 1)[1].split("(")[0].strip()
+                headings.append((i, f"async def {name}"))
+        return headings
+
+    def _extract_code_blocks(self, text: str) -> list[tuple[int, int]]:
+        blocks: list[tuple[int, int]] = []
+        in_block = False
+        start = 0
+        for i, line in enumerate(text.splitlines(), 1):
+            stripped = line.strip()
+            if stripped.startswith("```"):
+                if not in_block:
+                    in_block = True
+                    start = i
+                else:
+                    blocks.append((start, i))
+                    in_block = False
+        return blocks
+
+
+class TsParser(BaseParser):
+    @property
+    def media_type(self) -> str:
+        return "text/typescript"
+
+    def parse(self, content: bytes) -> ParsedContent:
+        text = content.decode("utf-8", errors="replace")
+        lines = text.splitlines()
+        title = self._title_from_definitions(lines) or self._title_from_comment(lines) or "untitled"
+        headings = self._extract_headings_from_code(lines)
+        code_blocks = self._extract_code_blocks(text)
+        return ParsedContent(
+            title=title,
+            body=text,
+            media_type=self.media_type,
+            metadata={"language": "typescript", "line_count": len(lines)},
+            headings=headings,
+            code_blocks=code_blocks,
+        )
+
+    def _title_from_definitions(self, lines: list[str]) -> str | None:
+        for line in lines:
+            title = self._extract_ts_definition_title(line)
+            if title is not None:
+                return title
+        return None
+
+    def _extract_ts_definition_title(self, line: str) -> str | None:
+        stripped = line.strip()
+        candidates = [
+            ("class ", "{", 0),
+            ("function ", "(", 1),
+            ("export class ", "{", 2),
+            ("export function ", "(", 3),
+            ("interface ", "{", 4),
+            ("type ", "=", 5),
+        ]
+        for prefix, delimiter, _part_idx in candidates:
+            if stripped.startswith(prefix) and delimiter in stripped:
+                name = stripped.split(prefix, 1)[1].split(delimiter)[0].strip()
+                prefix_clean = prefix.replace("export ", "")
+                return f"{prefix_clean}{name}"
+        return None
+
+    def _title_from_comment(self, lines: list[str]) -> str | None:
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("// "):
+                return stripped[3:120].strip() or None
+        return None
+
+    def _extract_headings_from_code(self, lines: list[str]) -> list[tuple[int, str]]:
+        headings: list[tuple[int, str]] = []
+        for i, line in enumerate(lines, 1):
+            stripped = line.strip()
+            if stripped.startswith("class ") and "{" in stripped:
+                name = stripped.split("class ", 1)[1].split("{")[0].split("<")[0].strip()
+                headings.append((i, f"class {name}"))
+            elif stripped.startswith("function ") and "(" in stripped:
+                name = stripped.split("function ", 1)[1].split("(")[0].strip()
+                headings.append((i, f"function {name}"))
+            elif stripped.startswith("export class ") and "{" in stripped:
+                name = stripped.split("export class ", 1)[1].split("{")[0].split("<")[0].strip()
+                headings.append((i, f"export class {name}"))
+            elif stripped.startswith("export function ") and "(" in stripped:
+                name = stripped.split("export function ", 1)[1].split("(")[0].strip()
+                headings.append((i, f"export function {name}"))
+            elif stripped.startswith("interface ") and "{" in stripped:
+                name = stripped.split("interface ", 1)[1].split("{")[0].split("<")[0].strip()
+                headings.append((i, f"interface {name}"))
+            elif stripped.startswith("type ") and "=" in stripped:
+                name = stripped.split("type ", 1)[1].split("=")[0].strip()
+                headings.append((i, f"type {name}"))
+        return headings
+
+    def _extract_code_blocks(self, text: str) -> list[tuple[int, int]]:
+        blocks: list[tuple[int, int]] = []
+        in_block = False
+        start = 0
+        for i, line in enumerate(text.splitlines(), 1):
+            stripped = line.strip()
+            if stripped.startswith("```"):
+                if not in_block:
+                    in_block = True
+                    start = i
+                else:
+                    blocks.append((start, i))
+                    in_block = False
+        return blocks
+
+
 for _parser_cls in (
     TextParser,
     MarkdownParser,
@@ -604,5 +766,7 @@ for _parser_cls in (
     PdfParser,
     DocxParser,
     EpubParser,
+    PyParser,
+    TsParser,
 ):
     ParserRegistry.register(_parser_cls())
