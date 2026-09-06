@@ -3,16 +3,29 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from dataclasses import dataclass
 from typing import Any
 
 from openai import AsyncOpenAI
+from opentelemetry.metrics import get_meter
 from opentelemetry.trace import get_tracer
 
 from groundgraph.application.ports import EmbeddingProvider
 from groundgraph.application.settings import Settings, get_settings
 
 _TRACER = get_tracer(__name__)
+_METER = get_meter(__name__)
+
+_EMBED_DURATION = _METER.create_histogram(
+    "groundgraph.retrieval.embedding.duration",
+    description="Embedding call duration in milliseconds.",
+    unit="ms",
+)
+_EMBED_TOKENS = _METER.create_counter(
+    "groundgraph.retrieval.embedding.tokens",
+    description="Total embedding tokens consumed.",
+)
 
 
 @dataclass(frozen=True)
@@ -106,7 +119,14 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
         with _TRACER.start_as_current_span("embedding.call_api") as span:
             span.set_attribute("embedding.batch_size", len(texts))
             span.set_attribute("embedding.model", self._model)
+            start = time.perf_counter()
             response = await self._client.embeddings.create(**kwargs)
+            duration_ms = (time.perf_counter() - start) * 1000
+            _EMBED_DURATION.record(duration_ms)
+            if response.usage:
+                _EMBED_TOKENS.add(response.usage.total_tokens)
+                span.set_attribute("embedding.tokens", response.usage.total_tokens)
+            span.set_attribute("embedding.duration_ms", duration_ms)
             return [item.embedding for item in response.data]
 
     @property

@@ -2,18 +2,19 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from sqlalchemy import select
 
 from groundgraph.application.ports import IndexVersionInfo, IndexVersionResolver
 from groundgraph.infrastructure.postgres.models import IndexVersion as IndexVersionModel
-from groundgraph.infrastructure.postgres.session import PostgresSession
 
 
 class PostgresIndexVersionResolver(IndexVersionResolver):
     """Resolve active IndexVersion from PostgreSQL."""
 
-    def __init__(self, session: PostgresSession) -> None:
-        self._session = session
+    def __init__(self, session_factory: Any) -> None:
+        self._session_factory = session_factory
 
     async def resolve_active(self, index_name: str) -> IndexVersionInfo | None:
         stmt = (
@@ -25,8 +26,9 @@ class PostgresIndexVersionResolver(IndexVersionResolver):
             .order_by(IndexVersionModel.created_at.desc())
             .limit(1)
         )
-        result = await self._session.execute(stmt)
-        row = result.scalar_one_or_none()
+        async with self._session_factory() as session:
+            result = await session.execute(stmt)
+            row = result.scalar_one_or_none()
         if row is None:
             return None
         return IndexVersionInfo(

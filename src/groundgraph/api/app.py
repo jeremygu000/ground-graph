@@ -19,6 +19,7 @@ from opentelemetry.trace import Span
 
 from groundgraph.api.dependencies import build_health_service, request_id_from_headers
 from groundgraph.api.health import router as health_router
+from groundgraph.api.query import router as query_router
 from groundgraph.application.health import HealthService
 from groundgraph.application.settings import Settings, get_settings
 from groundgraph.infrastructure.logging import (
@@ -26,7 +27,12 @@ from groundgraph.infrastructure.logging import (
     clear_request_context,
     configure_json_logging,
 )
-from groundgraph.infrastructure.metrics import AppMetrics, init_app_metrics
+from groundgraph.infrastructure.metrics import (
+    AppMetrics,
+    RetrievalMetrics,
+    init_app_metrics,
+    init_retrieval_metrics,
+)
 from groundgraph.infrastructure.telemetry import (
     configure_meter_provider,
     configure_tracing,
@@ -120,6 +126,7 @@ def create_app(  # noqa: PLR0915 - composition root keeps app lifecycle wiring t
     metric_reader: MetricReader | None = None,
     telemetry_enabled: bool | None = None,
     app_metrics: AppMetrics | None = None,
+    retrieval_metrics: RetrievalMetrics | None = None,
 ) -> FastAPI:
     """Create the API application.
 
@@ -152,6 +159,9 @@ def create_app(  # noqa: PLR0915 - composition root keeps app lifecycle wiring t
     else:
         meter = get_meter(meter_provider, settings.otel_service_name)
 
+    if retrieval_metrics is None:
+        retrieval_metrics = init_retrieval_metrics(meter)
+
     instrumented = tracing_enabled or span_exporter is not None
 
     @asynccontextmanager
@@ -175,6 +185,7 @@ def create_app(  # noqa: PLR0915 - composition root keeps app lifecycle wiring t
     app.state.health_service = health
 
     app.include_router(health_router)
+    app.include_router(query_router)
 
     @app.get("/docs", include_in_schema=False)
     async def swagger_ui() -> HTMLResponse:

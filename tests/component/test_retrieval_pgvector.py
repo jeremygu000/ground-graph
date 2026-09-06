@@ -167,7 +167,7 @@ async def test_vector_search_returns_correctly_ranked_chunks(
         chunk_ids = [c.chunk_id for c in ids["chunks"]]
         index_version_id = ids["index_version"].version_id
 
-        retriever = PostgresVectorRetriever(cast(Any, session))
+        retriever = PostgresVectorRetriever(cast(Any, session_factory))
         results = await retriever.search_with_content(
             vec_a,
             top_k=3,
@@ -199,7 +199,7 @@ async def test_acl_filter_excludes_unauthorized_chunks(
         chunk_ids = {c.chunk_id for c in ids["chunks"]}
         index_version_id = ids["index_version"].version_id
 
-        retriever = PostgresVectorRetriever(cast(Any, session))
+        retriever = PostgresVectorRetriever(cast(Any, session_factory))
         results = await retriever.search_with_content(
             [1.0] * 1536,
             top_k=10,
@@ -238,7 +238,7 @@ async def test_cross_tenant_isolation(
         )
         index_version_a = ids_a["index_version"].version_id
 
-        retriever = PostgresVectorRetriever(cast(Any, session))
+        retriever = PostgresVectorRetriever(cast(Any, session_factory))
         results = await retriever.search_with_content(
             [1.0] * 1536,
             top_k=5,
@@ -274,7 +274,7 @@ async def test_keyword_search_returns_matching_chunks(
         )
         chunk_ids = [c.chunk_id for c in ids["chunks"]]
 
-        retriever = PostgresKeywordRetriever(cast(Any, session))
+        retriever = PostgresKeywordRetriever(cast(Any, session_factory))
         results = await retriever.search(
             "PostgreSQL pgvector similarity",
             top_k=3,
@@ -301,7 +301,7 @@ async def test_keyword_search_respects_tenant_filter(
             allowed_principals=["eng"],
         )
 
-        retriever = PostgresKeywordRetriever(cast(Any, session))
+        retriever = PostgresKeywordRetriever(cast(Any, session_factory))
         results = await retriever.search(
             "private document",
             top_k=5,
@@ -416,7 +416,7 @@ async def test_old_document_version_is_not_returned(
         )
         await session.commit()
 
-        retriever = PostgresVectorRetriever(cast(Any, session))
+        retriever = PostgresVectorRetriever(cast(Any, session_factory))
         results = await retriever.search_with_content(
             [1.0] * 1536,
             top_k=5,

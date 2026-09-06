@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import time
 from uuid import uuid4
 
 from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletionMessageParam
+from opentelemetry.metrics import get_meter
 from opentelemetry.trace import get_tracer
 from pydantic import BaseModel
 
@@ -14,6 +16,25 @@ from groundgraph.application.settings import Settings, get_settings
 from groundgraph.domain.retrieval import AnswerClaim, Citation, QueryResponse, RetrievalPlan
 
 _TRACER = get_tracer(__name__)
+_METER = get_meter(__name__)
+
+_GENERATE_DURATION = _METER.create_histogram(
+    "groundgraph.retrieval.generate.duration",
+    description="Answer generation duration in milliseconds.",
+    unit="ms",
+)
+_GENERATE_TOKENS = _METER.create_counter(
+    "groundgraph.retrieval.generate.tokens",
+    description="Total generation tokens consumed.",
+)
+_GENERATE_COST = _METER.create_histogram(
+    "groundgraph.retrieval.generate.cost_usd",
+    description="Estimated generation cost in USD.",
+    unit="USD",
+)
+
+_TOKEN_PRICE_PER_1K_INPUT = 0.00015
+_TOKEN_PRICE_PER_1K_OUTPUT = 0.0006
 
 
 class _ClaimOutput(BaseModel):
@@ -68,6 +89,7 @@ class EvidenceOnlyAnswerGenerator(AnswerGenerator):
             span.set_attribute("answer.question_length", len(question))
             span.set_attribute("answer.evidence_count", len(evidence))
             span.set_attribute("answer.strategy", retrieval_plan.strategy)
+            start = time.perf_counter()
 
             if not evidence:
                 return QueryResponse(
@@ -83,7 +105,9 @@ class EvidenceOnlyAnswerGenerator(AnswerGenerator):
             evidence_context = self._build_evidence_context(evidence)
 
             try:
-                response = await self._call_llm(question, evidence_context, evidence)
+                response, total_tokens, output_tokens = await self._call_llm(
+                    question, evidence_context, evidence
+                )
             except Exception:
                 return QueryResponse(
                     execution_run_id=uuid4(),
@@ -94,6 +118,18 @@ class EvidenceOnlyAnswerGenerator(AnswerGenerator):
                     confidence_band="low",
                     warnings=["Answer generation failed"],
                 )
+
+            duration_ms = (time.perf_counter() - start) * 1000
+            _GENERATE_DURATION.record(duration_ms)
+            _GENERATE_TOKENS.add(total_tokens)
+            input_tokens = total_tokens - output_tokens
+            estimated_cost = (input_tokens / 1000) * _TOKEN_PRICE_PER_1K_INPUT + (
+                output_tokens / 1000
+            ) * _TOKEN_PRICE_PER_1K_OUTPUT
+            _GENERATE_COST.record(estimated_cost)
+            span.set_attribute("answer.duration_ms", duration_ms)
+            span.set_attribute("answer.tokens", total_tokens)
+            span.set_attribute("answer.cost_usd", estimated_cost)
 
             result = self._build_response(response, evidence)
             span.set_attribute("answer.status", result.status)
@@ -112,7 +148,7 @@ class EvidenceOnlyAnswerGenerator(AnswerGenerator):
         question: str,
         evidence_context: str,
         evidence: list,
-    ) -> _ResponseOutput:
+    ) -> tuple[_ResponseOutput, int, int]:
         messages: list[ChatCompletionMessageParam] = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {
@@ -133,7 +169,13 @@ class EvidenceOnlyAnswerGenerator(AnswerGenerator):
         )
 
         raw = response.choices[0].message.content or "{}"
-        return _ResponseOutput.model_validate_json(raw)
+        usage = response.usage
+        tokens = usage.total_tokens if usage else 0
+        return (
+            _ResponseOutput.model_validate_json(raw),
+            tokens,
+            usage.completion_tokens if usage else 0,
+        )
 
     def _build_response(
         self,

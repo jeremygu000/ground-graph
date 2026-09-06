@@ -10,16 +10,6 @@ import pytest
 from groundgraph.infrastructure.postgres.keyword_retriever import PostgresKeywordRetriever
 
 
-class _FakeSession:
-    async def execute(self, stmt: Any) -> Any:
-        return _FakeResult()
-
-
-class _FakeResult:
-    def all(self) -> list[Any]:
-        return [_FakeRow()]
-
-
 class _FakeRow:
     def __init__(  # noqa: PLR0917
         self,
@@ -40,10 +30,36 @@ class _FakeRow:
         self.allowed_principals = allowed_principals or ["eng"]
 
 
+class _FakeResult:
+    def all(self) -> list[Any]:
+        return [_FakeRow()]
+
+
+class _FakeSession:
+    async def execute(self, stmt: Any) -> Any:
+        return _FakeResult()
+
+
+class _FakeSessionFactory:
+    def __call__(self) -> Any:
+        return _FakeAsyncContextManager(_FakeSession())
+
+
+class _FakeAsyncContextManager:
+    def __init__(self, value: Any) -> None:
+        self._value = value
+
+    async def __aenter__(self) -> Any:
+        return self._value
+
+    async def __aexit__(self, *args: Any) -> None:
+        pass
+
+
 @pytest.mark.asyncio
 async def test_keyword_search_returns_results() -> None:
-    session = cast(Any, _FakeSession())
-    retriever = PostgresKeywordRetriever(session)
+    factory = cast(Any, _FakeSessionFactory())
+    retriever = PostgresKeywordRetriever(factory)
     results = await retriever.search(
         "test query",
         top_k=5,
@@ -57,8 +73,8 @@ async def test_keyword_search_returns_results() -> None:
 
 @pytest.mark.asyncio
 async def test_keyword_search_empty_query_returns_empty() -> None:
-    session = cast(Any, _FakeSession())
-    retriever = PostgresKeywordRetriever(session)
+    factory = cast(Any, _FakeSessionFactory())
+    retriever = PostgresKeywordRetriever(factory)
     results = await retriever.search(
         "",
         top_k=5,
@@ -70,8 +86,8 @@ async def test_keyword_search_empty_query_returns_empty() -> None:
 
 @pytest.mark.asyncio
 async def test_keyword_search_whitespace_query_returns_empty() -> None:
-    session = cast(Any, _FakeSession())
-    retriever = PostgresKeywordRetriever(session)
+    factory = cast(Any, _FakeSessionFactory())
+    retriever = PostgresKeywordRetriever(factory)
     results = await retriever.search(
         "   ",
         top_k=5,

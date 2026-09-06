@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 from uuid import UUID
 
 from opentelemetry.trace import get_tracer
@@ -11,7 +12,6 @@ from sqlalchemy import func, select
 from groundgraph.infrastructure.postgres.models import Chunk as ChunkModel
 from groundgraph.infrastructure.postgres.models import Document as DocumentModel
 from groundgraph.infrastructure.postgres.models import Source as SourceModel
-from groundgraph.infrastructure.postgres.session import PostgresSession
 
 _TRACER = get_tracer(__name__)
 
@@ -30,8 +30,8 @@ class KeywordSearchResult:
 class PostgresKeywordRetriever:
     """PostgreSQL ``tsvector`` full-text search, ACL-filtered before results are returned."""
 
-    def __init__(self, session: PostgresSession) -> None:
-        self._session = session
+    def __init__(self, session_factory: Any) -> None:
+        self._session_factory = session_factory
 
     async def search(
         self,
@@ -91,20 +91,21 @@ class PostgresKeywordRetriever:
         with _TRACER.start_as_current_span("keyword.search") as span:
             span.set_attribute("keyword.top_k", top_k)
             span.set_attribute("retrieval.tenant_id", tenant_id)
-            result = await self._session.execute(stmt)
-            rows = result.all()
-            span.set_attribute("retrieval.result_count", len(rows))
-            return [
-                KeywordSearchResult(
-                    chunk_id=row.chunk_id,
-                    source_id=row.source_id,
-                    document_id=row.document_id,
-                    version_id=row.version_id,
-                    content=row.content,
-                    rank=float(row.rank),
-                    allowed_principals=list(row.allowed_principals)
-                    if row.allowed_principals
-                    else [],
-                )
-                for row in rows
-            ]
+            async with self._session_factory() as session:
+                result = await session.execute(stmt)
+                rows = result.all()
+                span.set_attribute("retrieval.result_count", len(rows))
+                return [
+                    KeywordSearchResult(
+                        chunk_id=row.chunk_id,
+                        source_id=row.source_id,
+                        document_id=row.document_id,
+                        version_id=row.version_id,
+                        content=row.content,
+                        rank=float(row.rank),
+                        allowed_principals=list(row.allowed_principals)
+                        if row.allowed_principals
+                        else [],
+                    )
+                    for row in rows
+                ]

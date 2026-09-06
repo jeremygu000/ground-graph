@@ -5,10 +5,11 @@ from __future__ import annotations
 import asyncio
 import secrets
 from contextlib import suppress
-from typing import Any, cast
+from typing import Annotated, Any, cast
 
 import asyncpg  # pyright: ignore[reportMissingTypeStubs]
 import httpx
+from fastapi import Depends
 from neo4j import AsyncGraphDatabase
 
 from groundgraph.application.health import (
@@ -16,7 +17,24 @@ from groundgraph.application.health import (
     HealthReasonCode,
     HealthService,
 )
-from groundgraph.application.settings import Settings
+from groundgraph.application.retrieval.retrieval_service import (
+    RetrievalService,
+    RetrievalServiceConfig,
+)
+from groundgraph.application.settings import Settings, get_settings
+from groundgraph.infrastructure.composition import (
+    PgKeywordRetrieverAdapter,
+    PgVectorContentRetriever,
+)
+from groundgraph.infrastructure.openai.answer_generator import EvidenceOnlyAnswerGenerator
+from groundgraph.infrastructure.openai.embedding_provider import OpenAIEmbeddingProvider
+from groundgraph.infrastructure.openai.reranker import CrossEncoderReranker
+from groundgraph.infrastructure.postgres.index_version_resolver import (
+    PostgresIndexVersionResolver,
+)
+from groundgraph.infrastructure.postgres.keyword_retriever import PostgresKeywordRetriever
+from groundgraph.infrastructure.postgres.session import get_session_factory
+from groundgraph.infrastructure.postgres.vector_retriever import PostgresVectorRetriever
 
 MAX_REQUEST_ID_LENGTH = 128
 
@@ -161,3 +179,32 @@ def build_health_service(settings: Settings) -> HealthService:
             "minio": MinioHealthChecker(settings.s3_endpoint_url),
         }
     )
+
+
+def _build_retrieval_service(settings: Settings) -> RetrievalService:
+    session_factory = get_session_factory()
+    embedding_provider = OpenAIEmbeddingProvider(settings=settings)
+    vector_retriever = PgVectorContentRetriever(PostgresVectorRetriever(session_factory))
+    keyword_retriever = PgKeywordRetrieverAdapter(PostgresKeywordRetriever(session_factory))
+    reranker = CrossEncoderReranker(settings=settings)
+    answer_generator = EvidenceOnlyAnswerGenerator(settings=settings)
+    index_version_resolver = PostgresIndexVersionResolver(session_factory)
+    return RetrievalService(
+        RetrievalServiceConfig(
+            session_factory=session_factory,
+            embedding_provider=embedding_provider,
+            vector_retriever=vector_retriever,
+            keyword_retriever=keyword_retriever,
+            reranker=reranker,
+            answer_generator=answer_generator,
+            index_version_resolver=index_version_resolver,
+            settings=settings,
+        )
+    )
+
+
+def get_retrieval_service(
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> RetrievalService:
+    """Return a cached RetrievalService instance for the request."""
+    return _build_retrieval_service(settings)

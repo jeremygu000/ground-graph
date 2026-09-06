@@ -20,6 +20,13 @@ class _FakeEmbeddingItem:
 class _FakeCreateResponse:
     def __init__(self, embeddings: list[list[float]]) -> None:
         self.data = [_FakeEmbeddingItem(e) for e in embeddings]
+        self.usage = _FakeUsage()
+
+
+class _FakeUsage:
+    def __init__(self) -> None:
+        self.prompt_tokens = 10
+        self.total_tokens = 10
 
 
 class _FakeOpenAIClient:

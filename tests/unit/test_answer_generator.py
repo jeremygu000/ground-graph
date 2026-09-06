@@ -24,6 +24,14 @@ class _FakeChoice:
 class _FakeCompletionResponse:
     def __init__(self, content: str | None) -> None:
         self.choices = [_FakeChoice(content)]
+        self.usage = _FakeUsage()
+
+
+class _FakeUsage:
+    def __init__(self) -> None:
+        self.prompt_tokens = 100
+        self.completion_tokens = 50
+        self.total_tokens = 150
 
 
 class _FakeCompletions:
