@@ -2,17 +2,28 @@
 
 from __future__ import annotations
 
+import logging
+import secrets
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
-from groundgraph.api.dependencies import get_query_workflow, get_retrieval_service
+from groundgraph.api.dependencies import (
+    Identity,
+    get_identity,
+    get_query_workflow,
+    get_retrieval_service,
+)
 from groundgraph.application.retrieval.retrieval_service import RetrievalService
+from groundgraph.domain.retrieval import QueryResponse
 from groundgraph.workflows.query_graph import QueryWorkflow
 
-router = APIRouter(prefix="/query", tags=["query"])
+router = APIRouter(tags=["query"])
+v1_router = APIRouter(prefix="/v1", tags=["v1-query"])
+
+LOG = logging.getLogger(__name__)
 
 
 class VectorQueryRequest(BaseModel):
@@ -56,16 +67,40 @@ class HybridQueryRequest(BaseModel):
     index_name: str | None = None
 
 
+class HybridQueryTrustedRequest(BaseModel):
+    """Request body for the trusted /v1/query endpoint.
+
+    tenant_id and principal are extracted from the trusted request identity
+    (X-Tenant-ID / X-Principal headers), not from this body.
+    """
+
+    question: str = Field(..., min_length=1, max_length=2000)
+    index_name: str | None = None
+
+
+def _handle_error(exc: Exception, request_id: str) -> None:
+    """Log the internal error and re-raise as HTTPException with safe detail."""
+    LOG.exception("Query failed [request_id=%s]: %s", request_id, exc)
+    raise HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail="Internal server error",
+        headers={"X-Request-ID": request_id},
+    ) from exc
+
+
 @router.post("/vector", response_model=VectorQueryResponse)
 async def query_vector(
     request: VectorQueryRequest,
     svc: Annotated[RetrievalService, Depends(get_retrieval_service)],
+    http_request: Request,
 ) -> VectorQueryResponse:
     """Execute a vector-only query and return an evidence-grounded answer.
 
     This is the M4 baseline vertical slice: embed → vector search → keyword search
     → RRF → rerank → evidence-only answer → citations.
     """
+    request_id = http_request.headers.get("x-request-id", f"req-{secrets.token_hex(12)}")
+    result: QueryResponse | None = None
     try:
         result = await svc.query(
             question=request.question,
@@ -76,11 +111,11 @@ async def query_vector(
             final_limit=request.final_limit,
         )
     except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(exc),
-        ) from exc
+        _handle_error(exc, request_id)
 
+    assert result is not None
+
+    assert result is not None
     return VectorQueryResponse(
         answer=result.answer,
         status=result.status,
@@ -113,16 +148,15 @@ async def query_vector(
 async def query_hybrid(
     request: HybridQueryRequest,
     workflow: Annotated[QueryWorkflow, Depends(get_query_workflow)],
+    http_request: Request,
 ) -> VectorQueryResponse:
     """Execute a hybrid GraphRAG query using the full query workflow.
 
     This is the M7 endpoint: hybrid vector + keyword + graph retrieval
     with claim validation and fail-closed responses when evidence is insufficient.
-
-    Note: tenant_id and principal_id are sourced from the authenticated
-    request context in production. The current implementation accepts them
-    from the request body as a development placeholder.
     """
+    request_id = http_request.headers.get("x-request-id", f"req-{secrets.token_hex(12)}")
+    result: QueryResponse | None = None
     try:
         result = await workflow.ainvoke(
             question=request.question,
@@ -131,10 +165,64 @@ async def query_hybrid(
             index_name=request.index_name,
         )
     except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(exc),
-        ) from exc
+        _handle_error(exc, request_id)
+
+    assert result is not None
+
+    return VectorQueryResponse(
+        answer=result.answer,
+        status=result.status,
+        claims=[
+            ClaimModel(
+                claim_id=c.claim_id,
+                text=c.text,
+                factual=c.factual,
+                support_status=c.support_status,
+                evidence_ids=c.evidence_ids,
+            )
+            for c in result.claims
+        ],
+        citations=[
+            CitationModel(
+                citation_id=cit.citation_id,
+                claim_id=cit.claim_id,
+                evidence_id=cit.evidence_id,
+                locator=cit.locator,
+            )
+            for cit in result.citations
+        ],
+        confidence_band=result.confidence_band,
+        execution_run_id=result.execution_run_id,
+        warnings=result.warnings,
+    )
+
+
+@v1_router.post("/query", response_model=VectorQueryResponse, name="query-hybrid-trusted")
+async def query_v1(
+    request: HybridQueryTrustedRequest,
+    workflow: Annotated[QueryWorkflow, Depends(get_query_workflow)],
+    identity: Annotated[Identity, Depends(get_identity)],
+    http_request: Request,
+) -> VectorQueryResponse:
+    """Execute a hybrid GraphRAG query using trusted identity from request context.
+
+    This is the M7 stable endpoint. tenant_id and principal are extracted from
+    trusted request identity (X-Tenant-ID / X-Principal headers set by gateway),
+    NOT from client-supplied body fields.
+    """
+    request_id = http_request.headers.get("x-request-id", f"req-{secrets.token_hex(12)}")
+    result: QueryResponse | None = None
+    try:
+        result = await workflow.ainvoke(
+            question=request.question,
+            principal=identity.principal,
+            tenant_id=identity.tenant_id,
+            index_name=request.index_name,
+        )
+    except Exception as exc:
+        _handle_error(exc, request_id)
+
+    assert result is not None
 
     return VectorQueryResponse(
         answer=result.answer,

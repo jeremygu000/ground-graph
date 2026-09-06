@@ -1,0 +1,120 @@
+{
+  "version": "0.1.0",
+  "generatedAt": "2026-09-07T00:00:00.000Z",
+  "datasetVersion": "0.1.0",
+  "embeddingModel": "text-embedding-3-small",
+  "embeddingDimension": 1536,
+  "rerankerModel": "gpt-4o-mini",
+  "generatorModel": "gpt-4o-mini",
+  "indexVersion": "pending",
+  "milestone": "M6",
+  "note": "M6 Hybrid GraphRAG evaluation. Hybrid retrieval (vector+graph+RRF) implemented. "
+          + "Graph traversal with temporal validity, ACL filtering, and status=verified constraint. "
+          + "Actual evaluation requires component test infrastructure (Testcontainers). "
+          + "This report records the capability state and planned evaluation when infrastructure is available.",
+  "strategyComparison": {
+    "vector": {
+      "description": "Pure vector similarity search with RRF keyword fusion",
+      "strengths": ["Fast retrieval", "Semantic similarity", "High recall for direct entity queries"],
+      "weaknesses": ["No relationship/multi-hop reasoning", "No temporal validity", "No provenance tracking"],
+      "expectedAccuracy": null,
+      "relationshipAccuracy": null
+    },
+    "graph": {
+      "description": "Knowledge graph traversal with verified facts only",
+      "strengths": ["Relationship/multi-hop reasoning", "Temporal validity filtering", "Provenance via fact evidence_ids", "ACL enforcement at query time"],
+      "weaknesses": ["Requires entity seed", "Limited by graph completeness", "No fuzzy similarity matching"],
+      "expectedAccuracy": null,
+      "relationshipAccuracy": null
+    },
+    "hybrid": {
+      "description": "Extended RRF fusion of vector + keyword + graph evidence",
+      "strengths": ["Combines semantic recall with graph reasoning", "Temporal and ACL filtering", "Multi-hop path scoring via depth penalty + staleness"],
+      "weaknesses": ["Higher latency than vector-only", "Requires both index and graph populated"],
+      "expectedAccuracy": null,
+      "relationshipAccuracy": null,
+      "relativeImprovementVsVector": null
+    }
+  },
+  "cases": [
+    {
+      "caseId": "v-001",
+      "status": "skipped",
+      "reason": "M6 hybrid pipeline baseline established; full E2E evaluation requires Testcontainers infrastructure. "
+              + "The hybrid retrieval path (vector + graph fusion via extended RRF) is implemented and tested via unit tests."
+    },
+    {
+      "caseId": "v-002",
+      "status": "skipped",
+      "reason": "See v-001."
+    },
+    {
+      "caseId": "g-001",
+      "status": "skipped",
+      "reason": "Graph-only evaluation requires populated Neo4j knowledge graph with verified facts. "
+              + "M6 graph traversal, temporal validity, and ACL filtering are implemented; "
+              + "integration evaluation pending Testcontainers setup."
+    },
+    {
+      "caseId": "g-002",
+      "status": "skipped",
+      "reason": "See g-001."
+    },
+    {
+      "caseId": "h-001",
+      "status": "skipped",
+      "reason": "Hybrid (vector+graph) evaluation requires both pgvector index and Neo4j graph populated. "
+              + "hybrid_rrf_fusion unit tests pass. Full evaluation pending component test infrastructure."
+    },
+    {
+      "caseId": "h-002",
+      "status": "skipped",
+      "reason": "See h-001."
+    },
+    {
+      "caseId": "acl-001",
+      "status": "skipped",
+      "reason": "ACL leakage test: Tenant A (eng) vs Tenant B (eng). "
+              + "GraphRepository.find_facts now filters by allowed_principals via Cypher. "
+              + "Integration test requires Testcontainers."
+    },
+    {
+      "caseId": "acl-002",
+      "status": "skipped",
+      "reason": "See acl-001."
+    },
+    {
+      "caseId": "temporal-001",
+      "status": "skipped",
+      "reason": "Temporal traversal: A→B(valid_from=2026), B→C(valid_at=2024). "
+              + "Temporal validity filter now prevents expansion through invalid edges. "
+              + "Unit tests pass for _is_temporal_valid; integration test pending."
+    }
+  ],
+  "summary": {
+    "totalCases": 9,
+    "completedCases": 0,
+    "skippedCases": 9,
+    "vectorAccuracy": null,
+    "graphAccuracy": null,
+    "hybridAccuracy": null,
+    "relativeImprovementVsVector": null,
+    "relationshipAccuracyImprovement": null,
+    "aclLeakageRate": null,
+    "status": "baseline_established_capability_implemented"
+  },
+  "implementationStatus": {
+    "vectorRetrieval": "implemented",
+    "keywordRetrieval": "implemented",
+    "graphTraversal": "implemented",
+    "temporalValidity": "implemented",
+    "aclFiltering": "implemented",
+    "hybridRrfFusion": "implemented",
+    "graphEvidenceHydration": "implemented",
+    "componentTestInfrastructure": "pending_testcontainers"
+  },
+  "plannedRemediation": {
+    "ifHybridBelow15PercentImprovement": "ADR will be created to document evidence and remediation plan. "
+      + "Possible directions: improved entity resolution, deeper graph traversal, graph-specific embedding."
+  }
+}

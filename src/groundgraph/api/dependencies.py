@@ -9,8 +9,9 @@ from typing import Annotated, Any, cast
 
 import asyncpg  # pyright: ignore[reportMissingTypeStubs]
 import httpx
-from fastapi import Depends
+from fastapi import Depends, Header, Request
 from neo4j import AsyncGraphDatabase
+from pydantic import BaseModel
 
 from groundgraph.application.extraction.entity_resolver import EntityResolutionService
 from groundgraph.application.extraction.llm_extractor import LLMEntityExtractor
@@ -45,6 +46,37 @@ from groundgraph.infrastructure.postgres.vector_retriever import PostgresVectorR
 from groundgraph.workflows.query_graph import QueryWorkflow, QueryWorkflowConfig
 
 MAX_REQUEST_ID_LENGTH = 128
+
+
+class Identity(BaseModel):
+    """Trusted identity extracted from the authenticated request context.
+
+    In production this would be populated from a verified JWT, mTLS client cert,
+    or similar trusted auth mechanism.  The current implementation extracts from
+    well-known request headers set by a trusted upstream gateway.
+    """
+
+    tenant_id: str
+    principal: str
+
+
+def get_identity(
+    request: Request,
+    x_tenant_id: str | None = Header(default=None, alias="X-Tenant-ID"),
+    x_principal: str | None = Header(default=None, alias="X-Principal"),
+) -> Identity:
+    """Extract trusted identity from request headers.
+
+    In production, replace this with a real auth mechanism (JWT verification,
+    mTLS identity, etc.).  The header-based approach is acceptable as a
+    development/trusted-gateway pattern where the API gateway is the only
+    component that populates these headers.
+    """
+    if not x_tenant_id:
+        raise ValueError("X-Tenant-ID header is required")
+    if not x_principal:
+        raise ValueError("X-Principal header is required")
+    return Identity(tenant_id=x_tenant_id, principal=x_principal)
 
 
 def request_id_from_headers(headers: list[tuple[bytes, bytes]]) -> str:

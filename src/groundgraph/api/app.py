@@ -20,6 +20,7 @@ from opentelemetry.trace import Span
 from groundgraph.api.dependencies import build_health_service, request_id_from_headers
 from groundgraph.api.health import router as health_router
 from groundgraph.api.query import router as query_router
+from groundgraph.api.query import v1_router
 from groundgraph.application.health import HealthService
 from groundgraph.application.settings import Settings, get_settings
 from groundgraph.infrastructure.logging import (
@@ -186,6 +187,7 @@ def create_app(  # noqa: PLR0915 - composition root keeps app lifecycle wiring t
 
     app.include_router(health_router)
     app.include_router(query_router)
+    app.include_router(v1_router)
 
     @app.get("/docs", include_in_schema=False)
     async def swagger_ui() -> HTMLResponse:

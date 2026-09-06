@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 from uuid import UUID, uuid4
 
+from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 
 from groundgraph.application.answering.claim_validator import DeterministicClaimValidator
@@ -115,7 +116,7 @@ class QueryWorkflow:
         g.add_edge("retry", "execute")
         g.add_edge("fail", END)
 
-        return g.compile()  # type: ignore[return-value]
+        return g.compile(checkpointer=MemorySaver())  # type: ignore[return-value]
 
     async def _execute_node(self, state: QueryWorkflowState) -> dict:
         try:
