@@ -51,7 +51,7 @@ Update `[ ]` to `[x]` only after the milestone acceptance criteria and validatio
     not a new milestone.
 - [x] M2 — Domain contracts and persistence model (domain types, ports, Postgres + Neo4j adapters, Alembic migrations)
 - [x] M3 — Document ingestion and versioning
-- [ ] M4 — Vector RAG baseline
+- [x] M4 — Vector RAG baseline
 - [ ] M5 — Knowledge graph construction
 - [ ] M6 — Hybrid GraphRAG retrieval
 - [ ] M7 — Query workflow, citations, and API
