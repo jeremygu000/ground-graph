@@ -29,6 +29,7 @@ class _FactWithNames(TypedDict):
     depth: int
     subject_name: str
     object_name: str
+    path: list[UUID]
 
 
 class GraphFusionService:
@@ -83,6 +84,7 @@ class GraphFusionService:
             )
             for entry in facts:
                 fact = entry["fact"]
+                path = entry["path"]
                 path_len = entry["depth"]
                 subject_name = entry["subject_name"]
                 obj_name = entry["object_name"]
@@ -104,7 +106,7 @@ class GraphFusionService:
                         retrieval_method="graph",
                         vector_score=None,
                         rerank_score=None,
-                        graph_path_fact_ids=[fact.fact_id],
+                        graph_path_fact_ids=path,
                         valid_from=fact.valid_from,
                         valid_to=fact.valid_to,
                         allowed_principals=fact.allowed_principals,
@@ -124,11 +126,11 @@ class GraphFusionService:
         tenant_id: str | None,
     ) -> list[_FactWithNames]:
         results: list[_FactWithNames] = []
-        seen: set[UUID] = set()
-        queue: list[tuple[UUID, int]] = [(seed_id, 1)]
+        seen_entity_facts: set[tuple[UUID, UUID]] = set()
+        queue: list[tuple[UUID, int, list[UUID]]] = [(seed_id, 1, [])]
 
         while queue and len(results) < GRAPH_TRAVERSAL_MAX_FACTS:
-            current_id, depth = queue.pop(0)
+            current_id, depth, path = queue.pop(0)
             if depth > max_depth:
                 continue
 
@@ -143,22 +145,25 @@ class GraphFusionService:
                 tenant_id=tenant_id,
             )
             for fact in facts:
-                if fact.fact_id in seen:
+                entity_fact_key = (current_id, fact.fact_id)
+                if entity_fact_key in seen_entity_facts:
                     continue
                 if not self._is_temporal_valid(fact, valid_at):
                     continue
-                seen.add(fact.fact_id)
+                seen_entity_facts.add(entity_fact_key)
                 obj_entity = await self._repo.get_entity(fact.object_id)
                 obj_name = obj_entity.canonical_name if obj_entity else str(fact.object_id)
+                new_path = [*path, fact.fact_id]
                 results.append(
                     {
                         "fact": fact,
                         "depth": depth,
                         "subject_name": current_name,
                         "object_name": obj_name,
+                        "path": new_path,
                     }
                 )
-                queue.append((fact.object_id, depth + 1))
+                queue.append((fact.object_id, depth + 1, new_path))
 
             facts_as_obj = await self._repo.find_facts(
                 object_id=current_id,
@@ -168,22 +173,25 @@ class GraphFusionService:
                 tenant_id=tenant_id,
             )
             for fact in facts_as_obj:
-                if fact.fact_id in seen:
+                entity_fact_key = (current_id, fact.fact_id)
+                if entity_fact_key in seen_entity_facts:
                     continue
                 if not self._is_temporal_valid(fact, valid_at):
                     continue
-                seen.add(fact.fact_id)
+                seen_entity_facts.add(entity_fact_key)
                 subj_entity = await self._repo.get_entity(fact.subject_id)
                 subj_name = subj_entity.canonical_name if subj_entity else str(fact.subject_id)
+                new_path = [*path, fact.fact_id]
                 results.append(
                     {
                         "fact": fact,
                         "depth": depth,
                         "subject_name": subj_name,
                         "object_name": current_name,
+                        "path": new_path,
                     }
                 )
-                queue.append((fact.subject_id, depth + 1))
+                queue.append((fact.subject_id, depth + 1, new_path))
 
         return results
 
