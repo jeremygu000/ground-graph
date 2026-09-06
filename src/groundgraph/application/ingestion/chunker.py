@@ -139,7 +139,7 @@ class Chunker:
                 continue
 
             chunk_start_line = section_start + text[:start].count("\n")
-            chunk_end_line = section_start + text[start:end].count("\n")
+            chunk_end_line = chunk_start_line + text[start:end].count("\n")
             chunks.append((chunk_text, chunk_start_line, chunk_end_line))
 
             prev_end = end

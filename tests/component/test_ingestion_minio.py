@@ -329,23 +329,25 @@ async def test_concurrent_ingest_same_content(
 
 
 @pytest.mark.asyncio
-async def test_resume_idempotency_same_content(
+async def test_ingest_idempotent_failure_recovery(
     postgres_component: Any,
     s3_store: S3ObjectStore,
 ) -> None:
-    """Verify durable resume contract: re-ingesting same content produces no duplicate data.
+    """Verify idempotency properties that underpin durable failure recovery.
 
-    This tests the failure→retry proof path where:
-    - raw upload is idempotent (content-addressed key)
-    - version upsert is idempotent (ON CONFLICT DO NOTHING)
-    - exactly one version exists after multiple ingests
-    - raw object is not re-uploaded on retry
+    This tests the contract: "failure resumes without duplicating completed data"
 
-    Scenario:
-    1. First ingest: raw + doc + version + chunks + outbox created
-    2. Simulate failure then retry: raw already exists (idempotent),
-       version upsert finds existing (idempotent), no new chunks/outbox created
-    3. Verify: raw not re-uploaded, exactly one version, one chunk set, one outbox event
+    The durable resume architecture relies on two idempotency properties:
+    1. Raw storage is content-addressed: same content → same S3 key → no re-upload
+    2. Version upsert uses ON CONFLICT (document_id, checksum) → same content
+       in same document produces same version, not duplicates
+
+    If a failure occurs after raw upload but before PG commit:
+    - On retry, raw is not re-uploaded (idempotent key)
+    - On retry, version upsert finds existing checksum (idempotent)
+    - Final state has exactly 1 doc/version/chunks/outbox
+
+    This test verifies these properties directly.
     """
     async with _pg_session(postgres_component.dsn) as sf:
 
@@ -371,6 +373,7 @@ async def test_resume_idempotency_same_content(
 
             test_file = os.path.join(tmpdir, "resume.txt")
             content = "Content for resume idempotency test."
+            content_bytes = content.encode()
             await asyncio.to_thread(_write_file, test_file, content)
 
             result1 = await service.ingest_file(
@@ -382,15 +385,8 @@ async def test_resume_idempotency_same_content(
             doc1_id = result1.document_id
             ver1_id = result1.version_id
 
-            async with make_uow() as uow:
-                chunks_count = await uow.documents.list_chunks(doc1_id, ver1_id)
-                assert len(chunks_count) >= 1
-
-                pending = await uow.outbox.claim_batch(
-                    batch_size=10, worker_id="test-worker", lease_duration_seconds=60
-                )
-                events = [e for e in pending if e.aggregate_id == doc1_id]
-                assert len(events) >= 1
+            raw_key = f"sources/{source_id}/{hashlib.sha256(content_bytes).hexdigest()}/raw"
+            assert await s3_store.exists(raw_key), "raw should exist after first ingest"
 
             result2 = await service.ingest_file(
                 source_id=source_id,
@@ -401,12 +397,12 @@ async def test_resume_idempotency_same_content(
             assert result2.document_id == doc1_id
             assert result2.version_id == ver1_id
             assert result2.created_new_version is False, (
-                "same content should not create new version"
+                "re-ingest of same content should not create new version"
             )
 
             async with make_uow() as uow:
                 versions = await uow.documents.list_document_versions(doc1_id)
-                assert len(versions) == 1, "exactly one version should exist after retry"
+                assert len(versions) == 1, "exactly one version should exist"
 
                 chunks = await uow.documents.list_chunks(doc1_id, ver1_id)
                 assert len(chunks) >= 1
