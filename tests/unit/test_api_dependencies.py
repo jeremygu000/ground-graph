@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from pydantic import SecretStr
@@ -172,3 +172,74 @@ def test_build_health_service_wires_checkers() -> None:
     service = dependencies.build_health_service(settings)
 
     assert set(service.checkers) == {"postgres", "neo4j", "minio"}
+
+
+def test_get_identity_returns_identity_when_headers_present() -> None:
+    """get_identity extracts tenant_id and principal from trusted headers."""
+    mock_request = object()
+
+    identity = dependencies.get_identity(
+        request=mock_request,  # type: ignore[arg-type]
+        x_tenant_id="tenant-123",
+        x_principal="user-456",
+    )
+
+    assert identity.tenant_id == "tenant-123"
+    assert identity.principal == "user-456"
+
+
+def test_get_identity_raises_when_tenant_id_missing() -> None:
+    """get_identity raises ValueError when X-Tenant-ID is missing."""
+    mock_request = cast(Any, object())
+
+    with pytest.raises(ValueError, match="X-Tenant-ID header is required"):
+        dependencies.get_identity(request=mock_request, x_tenant_id=None, x_principal="user-1")
+
+
+def test_get_identity_raises_when_principal_missing() -> None:
+    """get_identity raises ValueError when X-Principal is missing."""
+    mock_request = cast(Any, object())
+
+    with pytest.raises(ValueError, match="X-Principal header is required"):
+        dependencies.get_identity(request=mock_request, x_tenant_id="tenant-1", x_principal=None)
+
+
+def test_request_id_from_headers_prefers_request_id_over_correlation_id() -> None:
+    """request_id_from_headers prefers x-request-id over x-correlation-id."""
+    headers = [(b"x-request-id", b"req-123"), (b"x-correlation-id", b"corr-456")]
+    request_id = dependencies.request_id_from_headers(headers)
+    assert request_id == "req-123"
+
+
+def test_request_id_from_headers_rejects_too_long_request_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """request_id_from_headers rejects request ID longer than 128 chars."""
+    monkeypatch.setattr(
+        "groundgraph.api.dependencies.secrets.token_hex",
+        lambda _n: "deadbeefdeadbeefdeadbeef",
+    )
+    long_id = "a" * 129
+    headers = [(b"x-request-id", long_id.encode())]
+    request_id = dependencies.request_id_from_headers(headers)
+    assert request_id == "req-deadbeefdeadbeefdeadbeef"
+
+
+def test_request_id_from_headers_rejects_non_alphanumeric_request_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """request_id_from_headers rejects request ID with spaces."""
+    monkeypatch.setattr(
+        "groundgraph.api.dependencies.secrets.token_hex",
+        lambda _n: "deadbeefdeadbeefdeadbeef",
+    )
+    headers = [(b"x-request-id", b"req with spaces")]
+    request_id = dependencies.request_id_from_headers(headers)
+    assert request_id == "req-deadbeefdeadbeefdeadbeef"
+
+
+def test_request_id_from_headers_accepts_hyphen_underscore_in_request_id() -> None:
+    """request_id_from_headers accepts request ID with hyphens and underscores."""
+    headers = [(b"x-request-id", b"req-abc_123")]
+    request_id = dependencies.request_id_from_headers(headers)
+    assert request_id == "req-abc_123"
