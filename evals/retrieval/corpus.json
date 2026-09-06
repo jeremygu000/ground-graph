@@ -1,0 +1,347 @@
+{
+  "version": "0.1.0",
+  "tenantId": "00000000-0000-4000-8000-000000000001",
+  "chunks": [
+    {
+      "chunkId": "00000000-0000-4000-8000-0000000000c1",
+      "documentVersionId": "00000000-0000-4000-8000-0000000000b1",
+      "sequenceNumber": 1,
+      "content": "The PostgreSQL container enables the uuid-ossp and vector extensions via CREATE EXTENSION statements during initialisation. The pgvector extension is required for the chunk_embeddings table.",
+      "locator": {
+        "type": "heading",
+        "path": "deploy/docker/init.sql",
+        "startLine": 1
+      }
+    },
+    {
+      "chunkId": "00000000-0000-4000-8000-0000000000c2",
+      "content": "The default vector dimension configured for the chunk_embeddings column is 1536, matching the OpenAI text-embedding-3-small output.",
+      "locator": {
+        "type": "heading",
+        "path": "docs/architecture.md"
+      },
+      "documentVersionId": "00000000-0000-4000-8000-0000000000b02",
+      "documentId": "00000000-0000-4000-8000-0000000000d02"
+    },
+    {
+      "chunkId": "00000000-0000-4000-8000-0000000000c3",
+      "content": "The project pins Python 3.12 in pyproject.toml and CI installs the version using pyenv or the official python-version action.",
+      "locator": {
+        "type": "heading",
+        "path": "docs/engineering.md"
+      },
+      "documentVersionId": "00000000-0000-4000-8000-0000000000b03",
+      "documentId": "00000000-0000-4000-8000-0000000000d03"
+    },
+    {
+      "chunkId": "00000000-0000-4000-8000-0000000000c4",
+      "content": "uv is the chosen package manager. CI uses `uv sync --locked --all-extras` and `make check` for the deterministic gate.",
+      "locator": {
+        "type": "heading",
+        "path": "docs/engineering.md"
+      },
+      "documentVersionId": "00000000-0000-4000-8000-0000000000b04",
+      "documentId": "00000000-0000-4000-8000-0000000000d04"
+    },
+    {
+      "chunkId": "00000000-0000-4000-8000-0000000000c5",
+      "content": "outbox_events stores pending, claimed, completed, or dead-letter events with idempotency keys, claim tokens, lease expiry, and bounded retry attempts.",
+      "locator": {
+        "type": "heading",
+        "path": "docs/architecture.md"
+      },
+      "documentVersionId": "00000000-0000-4000-8000-0000000000b05",
+      "documentId": "00000000-0000-4000-8000-0000000000d05"
+    },
+    {
+      "chunkId": "00000000-0000-4000-8000-0000000000c6",
+      "content": "The HTTP API uses FastAPI with the official OpenAPI docs and health check endpoint. Pydantic v2 is used for request/response validation.",
+      "locator": {
+        "type": "heading",
+        "path": "docs/api.md"
+      },
+      "documentVersionId": "00000000-0000-4000-8000-0000000000b06",
+      "documentId": "00000000-0000-4000-8000-0000000000d06"
+    },
+    {
+      "chunkId": "00000000-0000-4000-8000-0000000000c7",
+      "content": "Neo4j is reached through the official neo4j-driver package. All queries are parameterised Cypher to keep the surface area small and safe.",
+      "locator": {
+        "type": "heading",
+        "path": "docs/architecture.md"
+      },
+      "documentVersionId": "00000000-0000-4000-8000-0000000000b07",
+      "documentId": "00000000-0000-4000-8000-0000000000d07"
+    },
+    {
+      "chunkId": "00000000-0000-4000-8000-0000000000c8",
+      "content": "Phoenix is the local OpenTelemetry trace UI. The Collector receives OTLP/HTTP traces and forwards them to Phoenix over the same protocol.",
+      "locator": {
+        "type": "heading",
+        "path": "docs/operations.md"
+      },
+      "documentVersionId": "00000000-0000-4000-8000-0000000000b08",
+      "documentId": "00000000-0000-4000-8000-0000000000d08"
+    },
+    {
+      "chunkId": "00000000-0000-4000-8000-0000000000c9",
+      "content": "Prometheus scrapes the application /metrics endpoint and Grafana visualises the time series. The local Prometheus and Grafana services are part of docker-compose.",
+      "locator": {
+        "type": "heading",
+        "path": "docs/operations.md"
+      },
+      "documentVersionId": "00000000-0000-4000-8000-0000000000b09",
+      "documentId": "00000000-0000-4000-8000-0000000000d09"
+    },
+    {
+      "chunkId": "00000000-0000-4000-8000-0000000000ca",
+      "content": "Object storage uses MinIO locally and the AWS S3 SDK as the client. Documents are stored under a per-tenant prefix.",
+      "locator": {
+        "type": "heading",
+        "path": "docs/architecture.md"
+      },
+      "documentVersionId": "00000000-0000-4000-8000-0000000000b0a",
+      "documentId": "00000000-0000-4000-8000-0000000000d0a"
+    },
+    {
+      "chunkId": "00000000-0000-4000-8000-0000000000cb",
+      "content": "Runtime validation is enforced at every external boundary using Pydantic v2 models. The domain layer exposes Pydantic-inferred types but does not import Pydantic as a runtime value at any other site.",
+      "locator": {
+        "type": "heading",
+        "path": "docs/engineering.md"
+      },
+      "documentVersionId": "00000000-0000-4000-8000-0000000000b0b",
+      "documentId": "00000000-0000-4000-8000-0000000000d0b"
+    },
+    {
+      "chunkId": "00000000-0000-4000-8000-0000000000cc",
+      "content": "Documents are versioned through immutable document_versions rows. Each version has a monotonically increasing version number, a content hash, and a checksum; the row itself is never updated.",
+      "locator": {
+        "type": "heading",
+        "path": "docs/architecture.md"
+      },
+      "documentVersionId": "00000000-0000-4000-8000-0000000000b0c",
+      "documentId": "00000000-0000-4000-8000-0000000000d0c"
+    },
+    {
+      "chunkId": "00000000-0000-4000-8000-0000000000cd",
+      "content": "Knowledge facts store validFrom, validTo, observedAt, and supersededBy fields so the system preserves historical truth.",
+      "locator": {
+        "type": "heading",
+        "path": "docs/architecture.md"
+      },
+      "documentVersionId": "00000000-0000-4000-8000-0000000000b0d",
+      "documentId": "00000000-0000-4000-8000-0000000000d0d"
+    },
+    {
+      "chunkId": "00000000-0000-4000-8000-0000000000ce",
+      "content": "Access control filtering is applied inside the repository layer (SQL or Cypher) before any result leaves the data store.",
+      "locator": {
+        "type": "heading",
+        "path": "docs/security.md"
+      },
+      "documentVersionId": "00000000-0000-4000-8000-0000000000b0e",
+      "documentId": "00000000-0000-4000-8000-0000000000d0e"
+    },
+    {
+      "chunkId": "00000000-0000-4000-8000-0000000000cf",
+      "content": "Execution steps transition pending -> running -> succeeded | failed | skipped | cancelled. Terminal states cannot transition again.",
+      "locator": {
+        "type": "heading",
+        "path": "docs/execution.md"
+      },
+      "documentVersionId": "00000000-0000-4000-8000-0000000000b0f",
+      "documentId": "00000000-0000-4000-8000-0000000000d0f"
+    },
+    {
+      "chunkId": "00000000-0000-4000-8000-0000000000d0",
+      "content": "Execution runs transition pending -> running -> succeeded | partially_succeeded | failed | cancelled.",
+      "locator": {
+        "type": "heading",
+        "path": "docs/execution.md"
+      },
+      "documentVersionId": "00000000-0000-4000-8000-0000000000b10",
+      "documentId": "00000000-0000-4000-8000-0000000000d10"
+    },
+    {
+      "chunkId": "00000000-0000-4000-8000-0000000000d1",
+      "content": "Telemetry attributes must not include raw document content, prompts, responses, embeddings, secrets, or principal lists.",
+      "locator": {
+        "type": "heading",
+        "path": "docs/operations.md"
+      },
+      "documentVersionId": "00000000-0000-4000-8000-0000000000b11",
+      "documentId": "00000000-0000-4000-8000-0000000000d11"
+    },
+    {
+      "chunkId": "00000000-0000-4000-8000-0000000000d2",
+      "content": "OpenTelemetry traces are exported over OTLP/HTTP to the local Collector, which forwards them to Phoenix.",
+      "locator": {
+        "type": "heading",
+        "path": "docs/operations.md"
+      },
+      "documentVersionId": "00000000-0000-4000-8000-0000000000b12",
+      "documentId": "00000000-0000-4000-8000-0000000000d12"
+    },
+    {
+      "chunkId": "00000000-0000-4000-8000-0000000000d3",
+      "content": "Default fusion combines vector search and full-text search via reciprocal rank fusion with configurable weights and dedup by chunk id.",
+      "locator": {
+        "type": "heading",
+        "path": "docs/retrieval.md"
+      },
+      "documentVersionId": "00000000-0000-4000-8000-0000000000b13",
+      "documentId": "00000000-0000-4000-8000-0000000000d13"
+    },
+    {
+      "chunkId": "00000000-0000-4000-8000-0000000000d4",
+      "content": "Knowledge facts use the status values candidate, verified, rejected, and superseded. The superseded status indicates a fact that has been replaced by a later verified fact.",
+      "locator": {
+        "type": "heading",
+        "path": "docs/architecture.md"
+      },
+      "documentVersionId": "00000000-0000-4000-8000-0000000000b14",
+      "documentId": "00000000-0000-4000-8000-0000000000d14"
+    },
+    {
+      "chunkId": "00000000-0000-4000-8000-0000000000d5",
+      "content": "Evaluation thresholds require citation coverage >= 95% and citation correctness >= 95% before a release can pass the gate.",
+      "locator": {
+        "type": "heading",
+        "path": "docs/evaluation.md"
+      },
+      "documentVersionId": "00000000-0000-4000-8000-0000000000b15",
+      "documentId": "00000000-0000-4000-8000-0000000000d15"
+    },
+    {
+      "chunkId": "00000000-0000-4000-8000-0000000000d6",
+      "content": "Evaluation datasets are versioned JSONL files. The case id, dataset version, and answer run version are stored on every result.",
+      "locator": {
+        "type": "heading",
+        "path": "docs/evaluation.md"
+      },
+      "documentVersionId": "00000000-0000-4000-8000-0000000000b16",
+      "documentId": "00000000-0000-4000-8000-0000000000d16"
+    },
+    {
+      "chunkId": "00000000-0000-4000-8000-0000000000d7",
+      "content": "Vector search uses an HNSW index over the embedding column with vector_cosine_ops to support nearest neighbour queries at low latency.",
+      "locator": {
+        "type": "heading",
+        "path": "docs/retrieval.md"
+      },
+      "documentVersionId": "00000000-0000-4000-8000-0000000000b17",
+      "documentId": "00000000-0000-4000-8000-0000000000d17"
+    },
+    {
+      "chunkId": "00000000-0000-4000-8000-0000000000d8",
+      "content": "Full-text search uses a generated tsvector column with a GIN index and ts_rank_cd scoring. The chunk content is the only tokenised field.",
+      "locator": {
+        "type": "heading",
+        "path": "docs/retrieval.md"
+      },
+      "documentVersionId": "00000000-0000-4000-8000-0000000000b18",
+      "documentId": "00000000-0000-4000-8000-0000000000d18"
+    },
+    {
+      "chunkId": "00000000-0000-4000-8000-0000000000d9",
+      "content": "The OpenTelemetry trace signal carries spans. The log signal carries structured events. The metric signal carries numeric measurements.",
+      "locator": {
+        "type": "heading",
+        "path": "docs/operations.md"
+      },
+      "documentVersionId": "00000000-0000-4000-8000-0000000000b19",
+      "documentId": "00000000-0000-4000-8000-0000000000d19"
+    },
+    {
+      "chunkId": "00000000-0000-4000-8000-0000000000da",
+      "content": "Branded Python types (TenantId, SourceId, DocumentId, ...) are declared as NewType or TypedDict variants so they cannot be assigned to a plain str by accident.",
+      "locator": {
+        "type": "heading",
+        "path": "docs/engineering.md"
+      },
+      "documentVersionId": "00000000-0000-4000-8000-0000000000b1a",
+      "documentId": "00000000-0000-4000-8000-0000000000d1a"
+    },
+    {
+      "chunkId": "00000000-0000-4000-8000-0000000000db",
+      "content": "Each chunk row carries a stable id, a content hash, and a sequence number. The hash is used for change detection during ingestion.",
+      "locator": {
+        "type": "heading",
+        "path": "docs/architecture.md"
+      },
+      "documentVersionId": "00000000-0000-4000-8000-0000000000b1b",
+      "documentId": "00000000-0000-4000-8000-0000000000d1b"
+    },
+    {
+      "chunkId": "00000000-0000-4000-8000-0000000000dc",
+      "content": "Outbox workers claim events using SELECT ... FOR UPDATE SKIP LOCKED. The claim sets the lease token, worker id, and the next available time deterministically.",
+      "locator": {
+        "type": "heading",
+        "path": "docs/architecture.md"
+      },
+      "documentVersionId": "00000000-0000-4000-8000-0000000000b1c",
+      "documentId": "00000000-0000-4000-8000-0000000000d1c"
+    },
+    {
+      "chunkId": "00000000-0000-4000-8000-0000000000dd",
+      "content": "The OpenAI embedding adapter retries up to 3 times by default. Retries use exponential backoff and only fire for transient errors.",
+      "locator": {
+        "type": "heading",
+        "path": "docs/retrieval.md"
+      },
+      "documentVersionId": "00000000-0000-4000-8000-0000000000b1d",
+      "documentId": "00000000-0000-4000-8000-0000000000d1d"
+    },
+    {
+      "chunkId": "00000000-0000-4000-8000-0000000000de",
+      "content": "The lexical reranker blends the original vector score with token overlap (70% vector, 30% lexical) to give a deterministic improvement on keyword-heavy questions.",
+      "locator": {
+        "type": "heading",
+        "path": "docs/retrieval.md"
+      },
+      "documentVersionId": "00000000-0000-4000-8000-0000000000b1e",
+      "documentId": "00000000-0000-4000-8000-0000000000d1e"
+    },
+    {
+      "chunkId": "00000000-0000-4000-8000-0000000000df",
+      "content": "`make check` is the deterministic gate. It runs format:check, ruff, pyright, mypy, and unit tests in that order.",
+      "locator": {
+        "type": "heading",
+        "path": "docs/engineering.md"
+      },
+      "documentVersionId": "00000000-0000-4000-8000-0000000000b1f",
+      "documentId": "00000000-0000-4000-8000-0000000000d1f"
+    },
+    {
+      "chunkId": "00000000-0000-4000-8000-0000000000e0",
+      "content": "Access control is evaluated inside the repository query so no unfiltered data ever reaches the model. This is the pre-retrieval authorisation rule.",
+      "locator": {
+        "type": "heading",
+        "path": "docs/security.md"
+      },
+      "documentVersionId": "00000000-0000-4000-8000-0000000000b20",
+      "documentId": "00000000-0000-4000-8000-0000000000d20"
+    },
+    {
+      "chunkId": "00000000-0000-4000-8000-0000000000e1",
+      "content": "Every claim produced by the M4 vector pipeline must cite an immutable chunk via a deterministic citation id and an evidence id pointing at the same chunk.",
+      "locator": {
+        "type": "heading",
+        "path": "docs/retrieval.md"
+      },
+      "documentVersionId": "00000000-0000-4000-8000-0000000000b21",
+      "documentId": "00000000-0000-4000-8000-0000000000d21"
+    },
+    {
+      "chunkId": "00000000-0000-4000-8000-0000000000e2",
+      "content": "Knowledge fact confidence is a finite number in the range [0, 1]. Out-of-range values are rejected by a database check constraint.",
+      "locator": {
+        "type": "heading",
+        "path": "docs/architecture.md"
+      },
+      "documentVersionId": "00000000-0000-4000-8000-0000000000b22",
+      "documentId": "00000000-0000-4000-8000-0000000000d22"
+    }
+  ]
+}

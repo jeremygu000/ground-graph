@@ -15,7 +15,6 @@ from uuid import UUID, uuid4
 
 import sqlalchemy as sa
 from sqlalchemy import (
-    ARRAY,
     Boolean,
     DateTime,
     Float,
@@ -28,7 +27,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.ext.asyncio import AsyncAttrs
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship

@@ -11,6 +11,7 @@ from sqlalchemy import select
 from groundgraph.application.ports import VectorRetriever
 from groundgraph.infrastructure.postgres.models import Chunk as ChunkModel
 from groundgraph.infrastructure.postgres.models import ChunkEmbedding as ChunkEmbeddingModel
+from groundgraph.infrastructure.postgres.models import Document as DocumentModel
 from groundgraph.infrastructure.postgres.models import IndexVersion as IndexVersionModel
 from groundgraph.infrastructure.postgres.models import Source as SourceModel
 from groundgraph.infrastructure.postgres.session import PostgresSession
@@ -73,7 +74,7 @@ class PostgresVectorRetriever(VectorRetriever):
             conditions.append(SourceModel.allowed_principals.overlap(allowed_principals))
 
         if source_ids is not None:
-            conditions.append(ChunkModel.source_id.in_(source_ids))
+            conditions.append(DocumentModel.source_id.in_(source_ids))
 
         stmt = (
             select(
@@ -84,7 +85,8 @@ class PostgresVectorRetriever(VectorRetriever):
                 ChunkEmbeddingModel,
                 ChunkModel.chunk_id == ChunkEmbeddingModel.chunk_id,
             )
-            .join(SourceModel, ChunkModel.source_id == SourceModel.source_id)
+            .join(DocumentModel, ChunkModel.document_id == DocumentModel.document_id)
+            .join(SourceModel, DocumentModel.source_id == SourceModel.source_id)
             .where(*conditions)
             .order_by(ChunkEmbeddingModel.embedding.cosine_distance(query_vector))
             .limit(top_k)
@@ -128,12 +130,12 @@ class PostgresVectorRetriever(VectorRetriever):
             conditions.append(SourceModel.allowed_principals.overlap(allowed_principals))
 
         if source_ids is not None:
-            conditions.append(ChunkModel.source_id.in_(source_ids))
+            conditions.append(DocumentModel.source_id.in_(source_ids))
 
         stmt = (
             select(
                 ChunkModel.chunk_id,
-                ChunkModel.source_id,
+                DocumentModel.source_id,
                 ChunkModel.document_id,
                 ChunkModel.version_id,
                 ChunkModel.content,
@@ -144,7 +146,8 @@ class PostgresVectorRetriever(VectorRetriever):
                 ChunkEmbeddingModel,
                 ChunkModel.chunk_id == ChunkEmbeddingModel.chunk_id,
             )
-            .join(SourceModel, ChunkModel.source_id == SourceModel.source_id)
+            .join(DocumentModel, ChunkModel.document_id == DocumentModel.document_id)
+            .join(SourceModel, DocumentModel.source_id == SourceModel.source_id)
             .where(*conditions)
             .order_by(ChunkEmbeddingModel.embedding.cosine_distance(query_vector))
             .limit(top_k)
