@@ -48,11 +48,16 @@ class PostgresVectorRetriever(VectorRetriever):
         allowed_principals: list[str] | None = None
         source_ids: list[UUID] | None = None
         index_version_id: UUID | None = None
+        tenant_id: str | None = None
 
         if filters:
             allowed_principals = filters.get("allowed_principals")
             source_ids = filters.get("source_ids")
             index_version_id = filters.get("index_version_id")
+            tenant_id = filters.get("tenant_id")
+
+        if not tenant_id:
+            raise ValueError("tenant_id is required for retrieval")
 
         active_index = await self._get_active_index_version(index_version_id)
         if active_index is None:
@@ -61,6 +66,7 @@ class PostgresVectorRetriever(VectorRetriever):
         conditions = [
             ChunkEmbeddingModel.index_version_id == active_index.version_id,
             SourceModel.is_active == True,  # noqa: E712
+            SourceModel.tenant_id == tenant_id,
         ]
 
         if allowed_principals is not None:
@@ -93,15 +99,20 @@ class PostgresVectorRetriever(VectorRetriever):
         top_k: int,
         filters: dict[str, Any] | None = None,
     ) -> list[VectorSearchResult]:
-        """Return full search results with content, ACL-filtered."""
+        """Return full search results, ACL + tenant filtered."""
         allowed_principals: list[str] | None = None
         source_ids: list[UUID] | None = None
         index_version_id: UUID | None = None
+        tenant_id: str | None = None
 
         if filters:
             allowed_principals = filters.get("allowed_principals")
             source_ids = filters.get("source_ids")
             index_version_id = filters.get("index_version_id")
+            tenant_id = filters.get("tenant_id")
+
+        if not tenant_id:
+            raise ValueError("tenant_id is required for retrieval")
 
         active_index = await self._get_active_index_version(index_version_id)
         if active_index is None:
@@ -110,6 +121,7 @@ class PostgresVectorRetriever(VectorRetriever):
         conditions = [
             ChunkEmbeddingModel.index_version_id == active_index.version_id,
             SourceModel.is_active == True,  # noqa: E712
+            SourceModel.tenant_id == tenant_id,
         ]
 
         if allowed_principals is not None:

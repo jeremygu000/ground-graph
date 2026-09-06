@@ -107,6 +107,7 @@ class Evidence(BaseModel):
     source_id: UUID
     document_id: UUID | None = None
     chunk_id: UUID | None = None
+    version_id: UUID | None = None
     structured_record_id: str | None = None
     content: str
     retrieval_method: Literal["vector", "keyword", "graph", "structured"]

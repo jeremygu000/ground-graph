@@ -36,17 +36,23 @@ class PostgresKeywordRetriever:
         *,
         allowed_principals: list[str] | None = None,
         source_ids: list[UUID] | None = None,
+        tenant_id: str,
     ) -> list[KeywordSearchResult]:
-        """Return top-k keyword matches, filtered by ACL."""
+        """Return top-k keyword matches, tenant + ACL filtered.
+
+        Uses ``websearch_to_tsquery`` so raw user input (punctuation, operators)
+        does not raise ``tsquery`` syntax errors that would abort the whole
+        hybrid query.
+        """
         if not query or not query.strip():
             return []
 
-        lexemes = " & ".join(query.strip().split())
-        tsq = func.to_tsquery(lexemes)
+        tsq = func.websearch_to_tsquery("english", query)
 
         conditions = [
             func.to_tsvector("english", ChunkModel.content).op("@@")(tsq),
             SourceModel.is_active == True,  # noqa: E712
+            SourceModel.tenant_id == tenant_id,
         ]
 
         if allowed_principals is not None:

@@ -146,22 +146,42 @@ class EvidenceOnlyAnswerGenerator(AnswerGenerator):
             if raw_status not in valid_support_status:
                 raw_status = "unsupported"
 
-            claim = AnswerClaim(
-                claim_id=claim_id,
-                text=claim_output.text,
-                factual=claim_output.factual,
-                evidence_ids=mapped_ids,
-                support_status=raw_status,  # type: ignore[arg-type]
-            )
+            # Fail-closed: LLM may fabricate evidence IDs that don't exist in our
+            # evidence set.  If a claim is "supported" but maps to no real evidence,
+            # we must downgrade it to "unsupported" — otherwise the domain
+            # AnswerClaim validator raises.  We treat this as a grounding failure
+            # of the whole response.
+            if raw_status in ("supported", "partially_supported") and not mapped_ids:
+                raw_status = "unsupported"
+
+            try:
+                claim = AnswerClaim(
+                    claim_id=claim_id,
+                    text=claim_output.text,
+                    factual=claim_output.factual,
+                    evidence_ids=mapped_ids,
+                    support_status=raw_status,  # type: ignore[arg-type]
+                )
+            except Exception:
+                # Validation failure (e.g. status/evidence mismatch after
+                # downgrading).  Skip this claim and continue.
+                claim_id = uuid4()
+                continue
+
             claims.append(claim)
 
             for evidence_id in mapped_ids:
                 ev = evidence_map[str(evidence_id)]
+                chunk_locator = (
+                    f"{ev.chunk_id}@{ev.version_id}"
+                    if ev.chunk_id is not None and ev.version_id is not None
+                    else str(ev.structured_record_id or ev.evidence_id)
+                )
                 citation = Citation(
                     citation_id=uuid4(),
                     claim_id=claim_id,
                     evidence_id=evidence_id,
-                    locator=ev.chunk_id,
+                    locator=chunk_locator,
                     allowed_principals=ev.allowed_principals,
                 )
                 citations.append(citation)
@@ -172,7 +192,21 @@ class EvidenceOnlyAnswerGenerator(AnswerGenerator):
             1 for c in claims if c.support_status in ("supported", "partially_supported")
         )
         high_confidence_threshold = 3
+
+        # Fail closed: if the model claims an answer but produced no supported
+        # claims, the answer has no grounding — refuse rather than leak an
+        # unsupported assertion.
         if output.answer and output.answer.strip():
+            if supported_claim_count == 0:
+                return QueryResponse(
+                    execution_run_id=uuid4(),
+                    answer=None,
+                    status="insufficient_evidence",
+                    claims=[],
+                    citations=[],
+                    confidence_band="low",
+                    warnings=["LLM answer had no supported claims"],
+                )
             status = "answered"
             confidence = "high" if supported_claim_count >= high_confidence_threshold else "medium"
         else:

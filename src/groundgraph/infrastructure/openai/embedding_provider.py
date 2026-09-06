@@ -35,8 +35,11 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
         client: AsyncOpenAI | None = None,
         settings: Settings | None = None,
     ) -> None:
-        cfg = config or EmbeddingConfig()
         settings = settings or get_settings()
+        cfg = config or EmbeddingConfig(
+            model=settings.embedding_model,
+            dimensions=settings.embedding_dimensions,
+        )
         self._client = client or AsyncOpenAI(
             api_key=settings.openai_api_key_value,
             timeout=cfg.timeout,

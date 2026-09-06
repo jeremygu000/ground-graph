@@ -67,6 +67,7 @@ class Settings(BaseSettings):
     openai_base_url: str = "https://api.openai.com/v1"
     embedding_model: str = "text-embedding-3-small"
     embedding_dimensions: int = 1536
+    default_index_name: str = "default"
     generation_model: str = "gpt-4o-mini"
     extraction_model: str = "gpt-4o-mini"
     planner_model: str = "gpt-4o-mini"

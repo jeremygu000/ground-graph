@@ -11,6 +11,9 @@ Pydantic types — no framework imports allowed in the domain/application layers
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Protocol, Self, TypeVar
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from groundgraph.domain.documents import (
     Chunk,
@@ -129,7 +132,18 @@ class IngestionCheckpointRepository(Protocol):
 
 
 class EmbeddingProvider(Protocol):
-    """Port for embedding generation."""
+    """Port for embedding generation.
+
+    Adapters must expose ``model`` and ``dimensions`` so the retrieval
+    service can validate compatibility with the active ``IndexVersion``
+    before issuing any queries (ADR-009).
+    """
+
+    @property
+    def model(self) -> str: ...
+
+    @property
+    def dimensions(self) -> int: ...
 
     async def embed(self, texts: list[str]) -> list[list[float]]: ...
 
@@ -145,6 +159,53 @@ class VectorRetriever(Protocol):
         top_k: int,
         filters: dict[str, Any] | None = None,
     ) -> list[tuple[UUID, float]]: ...
+
+
+class RetrievedChunk(BaseModel):
+    """Application-layer value object for a retrieved chunk.
+
+    Lives here (not in domain.retrieval) so the application layer can depend
+    on it without importing infrastructure.  Infrastructure adapters convert
+    ORM rows to this dataclass before crossing the boundary.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    chunk_id: UUID
+    source_id: UUID
+    document_id: UUID | None = None
+    version_id: UUID | None = None
+    content: str
+    vector_score: float | None = None
+    keyword_score: float | None = None
+    allowed_principals: list[str] = Field(default_factory=list)
+
+
+class VectorContentRetriever(Protocol):
+    """Port for vector search that returns content alongside the score."""
+
+    async def search(
+        self,
+        query_vector: list[float],
+        top_k: int,
+        *,
+        allowed_principals: list[str],
+        tenant_id: str,
+        index_version_id: UUID,
+    ) -> list[RetrievedChunk]: ...
+
+
+class KeywordRetrieverPort(Protocol):
+    """Port for keyword / full-text search."""
+
+    async def search(
+        self,
+        query: str,
+        top_k: int,
+        *,
+        allowed_principals: list[str],
+        tenant_id: str,
+    ) -> list[RetrievedChunk]: ...
 
 
 class GraphRepository(Protocol):

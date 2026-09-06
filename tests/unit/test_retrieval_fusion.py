@@ -6,9 +6,44 @@ from uuid import uuid4
 
 import pytest
 
+from groundgraph.application.ports import RetrievedChunk
 from groundgraph.application.retrieval.fusion import reciprocal_rank_fusion
-from groundgraph.infrastructure.postgres.keyword_retriever import KeywordSearchResult
-from groundgraph.infrastructure.postgres.vector_retriever import VectorSearchResult
+
+
+def _vec_chunk(
+    *,
+    score: float | None = 0.1,
+    content: str = "test content",
+    chunk_id=None,
+) -> RetrievedChunk:
+    return RetrievedChunk(
+        chunk_id=chunk_id or uuid4(),
+        source_id=uuid4(),
+        document_id=uuid4(),
+        version_id=uuid4(),
+        content=content,
+        vector_score=score,
+        keyword_score=None,
+        allowed_principals=["eng"],
+    )
+
+
+def _kw_chunk(
+    *,
+    rank: float | None = 0.05,
+    content: str = "test content",
+    chunk_id=None,
+) -> RetrievedChunk:
+    return RetrievedChunk(
+        chunk_id=chunk_id or uuid4(),
+        source_id=uuid4(),
+        document_id=uuid4(),
+        version_id=uuid4(),
+        content=content,
+        vector_score=None,
+        keyword_score=rank,
+        allowed_principals=["eng"],
+    )
 
 
 class TestReciprocalRankFusion:
@@ -18,23 +53,7 @@ class TestReciprocalRankFusion:
 
     def test_vector_only_results(self) -> None:
         chunk_id = uuid4()
-        source_id = uuid4()
-        doc_id = uuid4()
-        ver_id = uuid4()
-
-        vector_results = [
-            VectorSearchResult(
-                chunk_id=chunk_id,
-                source_id=source_id,
-                document_id=doc_id,
-                version_id=ver_id,
-                content="test content",
-                score=0.1,
-                allowed_principals=["eng"],
-            )
-        ]
-
-        result = reciprocal_rank_fusion(vector_results, [])
+        result = reciprocal_rank_fusion([_vec_chunk(chunk_id=chunk_id, content="content a")], [])
 
         assert len(result) == 1
         assert result[0].chunk_id == chunk_id
@@ -44,23 +63,9 @@ class TestReciprocalRankFusion:
 
     def test_keyword_only_results(self) -> None:
         chunk_id = uuid4()
-        source_id = uuid4()
-        doc_id = uuid4()
-        ver_id = uuid4()
-
-        keyword_results = [
-            KeywordSearchResult(
-                chunk_id=chunk_id,
-                source_id=source_id,
-                document_id=doc_id,
-                version_id=ver_id,
-                content="test content",
-                rank=0.05,
-                allowed_principals=["eng"],
-            )
-        ]
-
-        result = reciprocal_rank_fusion([], keyword_results)
+        result = reciprocal_rank_fusion(
+            [], [_kw_chunk(chunk_id=chunk_id, content="content a", rank=0.05)]
+        )
 
         assert len(result) == 1
         assert result[0].chunk_id == chunk_id
@@ -70,42 +75,12 @@ class TestReciprocalRankFusion:
     def test_fusion_combines_both_sources(self) -> None:
         chunk_a = uuid4()
         chunk_b = uuid4()
-        source_id = uuid4()
-        doc_id = uuid4()
-        ver_id = uuid4()
 
         vector_results = [
-            VectorSearchResult(
-                chunk_id=chunk_a,
-                source_id=source_id,
-                document_id=doc_id,
-                version_id=ver_id,
-                content="content a",
-                score=0.1,
-                allowed_principals=["eng"],
-            ),
-            VectorSearchResult(
-                chunk_id=chunk_b,
-                source_id=source_id,
-                document_id=doc_id,
-                version_id=ver_id,
-                content="content b",
-                score=0.2,
-                allowed_principals=["eng"],
-            ),
+            _vec_chunk(chunk_id=chunk_a, content="content a"),
+            _vec_chunk(chunk_id=chunk_b, content="content b"),
         ]
-
-        keyword_results = [
-            KeywordSearchResult(
-                chunk_id=chunk_a,
-                source_id=source_id,
-                document_id=doc_id,
-                version_id=ver_id,
-                content="content a",
-                rank=0.05,
-                allowed_principals=["eng"],
-            ),
-        ]
+        keyword_results = [_kw_chunk(chunk_id=chunk_a, content="content a")]
 
         result = reciprocal_rank_fusion(vector_results, keyword_results)
 
@@ -117,33 +92,8 @@ class TestReciprocalRankFusion:
 
     def test_duplicates_merged_with_combined_scores(self) -> None:
         chunk_id = uuid4()
-        source_id = uuid4()
-        doc_id = uuid4()
-        ver_id = uuid4()
-
-        vector_results = [
-            VectorSearchResult(
-                chunk_id=chunk_id,
-                source_id=source_id,
-                document_id=doc_id,
-                version_id=ver_id,
-                content="content",
-                score=0.1,
-                allowed_principals=["eng"],
-            ),
-        ]
-
-        keyword_results = [
-            KeywordSearchResult(
-                chunk_id=chunk_id,
-                source_id=source_id,
-                document_id=doc_id,
-                version_id=ver_id,
-                content="content",
-                rank=0.05,
-                allowed_principals=["eng"],
-            ),
-        ]
+        vector_results = [_vec_chunk(chunk_id=chunk_id, content="c")]
+        keyword_results = [_kw_chunk(chunk_id=chunk_id, content="c")]
 
         result = reciprocal_rank_fusion(vector_results, keyword_results)
 
@@ -154,23 +104,8 @@ class TestReciprocalRankFusion:
 
     def test_custom_k_constant(self) -> None:
         chunk_id = uuid4()
-        source_id = uuid4()
-        doc_id = uuid4()
-        ver_id = uuid4()
-
-        vector_results = [
-            VectorSearchResult(
-                chunk_id=chunk_id,
-                source_id=source_id,
-                document_id=doc_id,
-                version_id=ver_id,
-                content="content",
-                score=0.1,
-                allowed_principals=["eng"],
-            ),
-        ]
-
-        result_default = reciprocal_rank_fusion(vector_results, [], k=60)
-        result_custom = reciprocal_rank_fusion(vector_results, [], k=100)
+        v = [_vec_chunk(chunk_id=chunk_id, content="c")]
+        result_default = reciprocal_rank_fusion(v, [], k=60)
+        result_custom = reciprocal_rank_fusion(v, [], k=100)
 
         assert result_default[0].rrf_score != result_custom[0].rrf_score
