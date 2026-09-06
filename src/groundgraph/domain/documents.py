@@ -33,6 +33,8 @@ class SourceDescriptor(BaseModel):
     classification: str
     tenant_id: str
     allowed_principals: list[str] = Field(default_factory=empty_str_list)
+    is_active: bool = True
+    deactivated_at: datetime | None = None
 
     @model_validator(mode="after")
     def _reject_empty_tenant_id(self) -> SourceDescriptor:

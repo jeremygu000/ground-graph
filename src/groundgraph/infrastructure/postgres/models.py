@@ -69,6 +69,8 @@ class Source(Base):
     allowed_principals: Mapped[list[str]] = mapped_column(
         ARRAY(String), nullable=False, default=list
     )
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    deactivated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

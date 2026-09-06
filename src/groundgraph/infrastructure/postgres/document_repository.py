@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy import select, text, update
@@ -68,6 +69,18 @@ class PostgresDocumentRepository(DocumentRepository):
     async def list_sources(self) -> list[SourceDescriptor]:
         result = await self._session.execute(select(SourceModel).order_by(SourceModel.created_at))
         return [self._source_to_domain(row) for row in result.scalars().all()]
+
+    async def deactivate_source(self, source_id: UUID) -> SourceDescriptor:
+        result = await self._session.execute(
+            select(SourceModel).where(SourceModel.source_id == source_id)
+        )
+        row = result.scalar_one_or_none()
+        if row is None:
+            raise ValueError(f"source not found: {source_id}")
+        row.is_active = False
+        row.deactivated_at = datetime.now(UTC)
+        await self._session.flush()
+        return self._source_to_domain(row)
 
     async def find_active_document_by_canonical_locator(
         self, source_id: UUID, canonical_locator: str
@@ -285,6 +298,8 @@ class PostgresDocumentRepository(DocumentRepository):
             classification=row.classification,
             tenant_id=row.tenant_id,
             allowed_principals=list(row.allowed_principals),
+            is_active=row.is_active if row.is_active is not None else True,
+            deactivated_at=row.deactivated_at,
         )
 
     def _document_version_to_domain(
