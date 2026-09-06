@@ -8,10 +8,7 @@
   "generatorModel": "gpt-4o-mini",
   "indexVersion": "pending",
   "milestone": "M6",
-  "note": "M6 Hybrid GraphRAG evaluation. Hybrid retrieval (vector+graph+RRF) implemented. "
-          + "Graph traversal with temporal validity, ACL filtering, and status=verified constraint. "
-          + "Actual evaluation requires component test infrastructure (Testcontainers). "
-          + "This report records the capability state and planned evaluation when infrastructure is available.",
+  "note": "M6 Hybrid GraphRAG evaluation. Hybrid retrieval (vector+graph+RRF) implemented. Graph traversal with temporal validity, ACL filtering, and status=verified constraint. Actual evaluation requires component test infrastructure (Testcontainers). This report records the capability state and planned evaluation when infrastructure is available.",
   "strategyComparison": {
     "vector": {
       "description": "Pure vector similarity search with RRF keyword fusion",
@@ -40,8 +37,7 @@
     {
       "caseId": "v-001",
       "status": "skipped",
-      "reason": "M6 hybrid pipeline baseline established; full E2E evaluation requires Testcontainers infrastructure. "
-              + "The hybrid retrieval path (vector + graph fusion via extended RRF) is implemented and tested via unit tests."
+      "reason": "M6 hybrid pipeline baseline established; full E2E evaluation requires Testcontainers infrastructure. The hybrid retrieval path (vector + graph fusion via extended RRF) is implemented and tested via unit tests."
     },
     {
       "caseId": "v-002",
@@ -51,9 +47,7 @@
     {
       "caseId": "g-001",
       "status": "skipped",
-      "reason": "Graph-only evaluation requires populated Neo4j knowledge graph with verified facts. "
-              + "M6 graph traversal, temporal validity, and ACL filtering are implemented; "
-              + "integration evaluation pending Testcontainers setup."
+      "reason": "Graph-only evaluation requires populated Neo4j knowledge graph with verified facts. M6 graph traversal, temporal validity, and ACL filtering are implemented; integration evaluation pending Testcontainers setup."
     },
     {
       "caseId": "g-002",
@@ -63,8 +57,7 @@
     {
       "caseId": "h-001",
       "status": "skipped",
-      "reason": "Hybrid (vector+graph) evaluation requires both pgvector index and Neo4j graph populated. "
-              + "hybrid_rrf_fusion unit tests pass. Full evaluation pending component test infrastructure."
+      "reason": "Hybrid (vector+graph) evaluation requires both pgvector index and Neo4j graph populated. hybrid_rrf_fusion unit tests pass. Full evaluation pending component test infrastructure."
     },
     {
       "caseId": "h-002",
@@ -74,9 +67,7 @@
     {
       "caseId": "acl-001",
       "status": "skipped",
-      "reason": "ACL leakage test: Tenant A (eng) vs Tenant B (eng). "
-              + "GraphRepository.find_facts now filters by allowed_principals via Cypher. "
-              + "Integration test requires Testcontainers."
+      "reason": "ACL leakage test: Tenant A (eng) vs Tenant B (eng). GraphRepository.find_facts now filters by allowed_principals via Cypher. Integration test requires Testcontainers."
     },
     {
       "caseId": "acl-002",
@@ -86,9 +77,7 @@
     {
       "caseId": "temporal-001",
       "status": "skipped",
-      "reason": "Temporal traversal: A→B(valid_from=2026), B→C(valid_at=2024). "
-              + "Temporal validity filter now prevents expansion through invalid edges. "
-              + "Unit tests pass for _is_temporal_valid; integration test pending."
+      "reason": "Temporal traversal: A-B (valid_from=2026), B-C (valid_at=2024). Temporal validity filter now prevents expansion through invalid edges. Unit tests pass for _is_temporal_valid; integration test pending."
     }
   ],
   "summary": {
@@ -114,7 +103,6 @@
     "componentTestInfrastructure": "pending_testcontainers"
   },
   "plannedRemediation": {
-    "ifHybridBelow15PercentImprovement": "ADR will be created to document evidence and remediation plan. "
-      + "Possible directions: improved entity resolution, deeper graph traversal, graph-specific embedding."
+    "ifHybridBelow15PercentImprovement": "ADR will be created to document evidence and remediation plan. Possible directions: improved entity resolution, deeper graph traversal, graph-specific embedding."
   }
 }
