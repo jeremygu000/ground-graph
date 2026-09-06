@@ -1,0 +1,160 @@
+# M5 initial ontology — entity types and predicates
+# Version: v0.1.0
+# This file is the source of truth; code-generated types are derived from it.
+
+version: v0.1.0
+entity_types:
+  - name: Person
+    description: A human individual
+    attributes:
+      - name: email
+        type: string
+        required: false
+      - name: role
+        type: string
+        required: false
+  - name: SoftwareSystem
+    description: A software product or service
+    attributes:
+      - name: version
+        type: string
+        required: false
+      - name: language
+        type: string
+        required: false
+      - name: license
+        type: string
+        required: false
+  - name: Repository
+    description: A code repository or monorepo
+    attributes:
+      - name: url
+        type: string
+        required: false
+      - name: default_branch
+        type: string
+        required: false
+  - name: Service
+    description: A deployed microservice or API
+    attributes:
+      - name: endpoint
+        type: string
+        required: false
+      - name: protocol
+        type: string
+        required: false
+  - name: Database
+    description: A data store (SQL, NoSQL, graph, etc.)
+    attributes:
+      - name: engine
+        type: string
+        required: false
+      - name: host
+        type: string
+        required: false
+  - name: Configuration
+    description: A configuration entity (file, env var, flag)
+    attributes:
+      - name: file_path
+        type: string
+        required: false
+      - name: key
+        type: string
+        required: false
+  - name: Document
+    description: A documentation artifact
+    attributes:
+      - name: title
+        type: string
+        required: false
+      - name: url
+        type: string
+        required: false
+  - name: Concept
+    description: An abstract concept or architectural pattern
+    attributes:
+      - name: definition
+        type: string
+        required: false
+
+predicates:
+  - name: owns
+    description: Ownership or authorship relationship
+    domain:
+      - Person
+      - SoftwareSystem
+    range:
+      - SoftwareSystem
+      - Repository
+    symmetric: false
+  - name: depends_on
+    description: Dependency relationship between systems
+    domain:
+      - SoftwareSystem
+      - Service
+    range:
+      - SoftwareSystem
+      - Service
+      - Database
+    symmetric: false
+  - name: documents
+    description: Documentation relationship
+    domain:
+      - Document
+    range:
+      - SoftwareSystem
+      - Service
+      - Concept
+    symmetric: false
+  - name: implements
+    description: Implementation relationship
+    domain:
+      - Service
+      - Repository
+    range:
+      - Concept
+      - Service
+    symmetric: false
+  - name: deploys
+    description: Deployment relationship
+    domain:
+      - Repository
+    range:
+      - Service
+    symmetric: false
+  - name: configures
+    description: Configuration relationship
+    domain:
+      - Configuration
+    range:
+      - SoftwareSystem
+      - Service
+    symmetric: false
+  - name: references
+    description: General reference or mention
+    domain:
+      - Document
+      - Configuration
+    range:
+      - SoftwareSystem
+      - Service
+      - Database
+      - Concept
+    symmetric: false
+  - name: supersedes
+    description: Supersession relationship (newer version replaces older)
+    domain:
+      - SoftwareSystem
+      - Configuration
+    range:
+      - SoftwareSystem
+      - Configuration
+    symmetric: false
+
+constraints:
+  - description: A fact with status=verified must have at least one evidence_id
+    expression: verified_implies_evidence
+  - description: A superseded fact must reference its superseding fact
+    expression: superseded_has_superseder
+  - description: valid_to must be after valid_from
+    expression: temporal_ordering

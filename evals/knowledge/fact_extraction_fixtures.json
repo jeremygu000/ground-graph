@@ -1,0 +1,41 @@
+{
+  "version": "v0.1.0",
+  "description": "Labelled fact extraction evaluation fixtures for M5",
+  "cases": [
+    {
+      "id": "fe-001",
+      "description": "Simple depends_on relationship",
+      "text": "The API Gateway depends on the Auth Service and the Redis cache.",
+      "entities": ["API Gateway", "Auth Service", "Redis"],
+      "expected_facts": [
+        {"predicate": "depends_on", "subject": "API Gateway", "object": "Auth Service"},
+        {"predicate": "depends_on", "subject": "API Gateway", "object": "Redis"}
+      ]
+    },
+    {
+      "id": "fe-002",
+      "description": "implements relationship",
+      "text": "The UserService implements the OAuth 2.0 protocol.",
+      "entities": ["UserService", "OAuth 2.0"],
+      "expected_facts": [
+        {"predicate": "implements", "subject": "UserService", "object": "OAuth 2.0"}
+      ]
+    },
+    {
+      "id": "fe-003",
+      "description": "No fact extraction when entities are unrelated",
+      "text": "PostgreSQL is a database. Redis is also a database.",
+      "entities": ["PostgreSQL", "Redis"],
+      "expected_facts": []
+    },
+    {
+      "id": "fe-004",
+      "description": "supersedes relationship",
+      "text": "PostgreSQL 16 supersedes PostgreSQL 15.",
+      "entities": ["PostgreSQL 16", "PostgreSQL 15"],
+      "expected_facts": [
+        {"predicate": "supersedes", "subject": "PostgreSQL 16", "object": "PostgreSQL 15"}
+      ]
+    }
+  ]
+}

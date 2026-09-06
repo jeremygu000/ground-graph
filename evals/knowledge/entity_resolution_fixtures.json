@@ -1,0 +1,46 @@
+{
+  "version": "v0.1.0",
+  "description": "Labelled entity resolution evaluation fixtures for M5",
+  "cases": [
+    {
+      "id": "er-001",
+      "description": "Exact string match",
+      "mention": "PostgreSQL",
+      "expected_type": "Database",
+      "expected_resolution": "PostgreSQL",
+      "confidence_threshold": 0.9
+    },
+    {
+      "id": "er-002",
+      "description": "Case-insensitive match",
+      "mention": "redis",
+      "expected_type": "Database",
+      "expected_resolution": "Redis",
+      "confidence_threshold": 0.8
+    },
+    {
+      "id": "er-003",
+      "description": "Fuzzy match - similar names",
+      "mention": "PostgreSQ",
+      "expected_type": "Database",
+      "expected_resolution": "PostgreSQL",
+      "confidence_threshold": 0.7
+    },
+    {
+      "id": "er-004",
+      "description": "Ambiguous entity - needs review",
+      "mention": "API",
+      "expected_type": null,
+      "expected_resolution": null,
+      "confidence_threshold": 0.0
+    },
+    {
+      "id": "er-005",
+      "description": "New entity - no prior canonical",
+      "mention": "Elasticsearch",
+      "expected_type": "Database",
+      "expected_resolution": "Elasticsearch",
+      "confidence_threshold": 0.5
+    }
+  ]
+}

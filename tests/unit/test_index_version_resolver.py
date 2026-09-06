@@ -37,7 +37,7 @@ class _FakeSession:
 
 
 class _FakeSessionFactory:
-    def __call__(self) -> _FakeAsyncContextManager[_FakeSession]:
+    def __call__(self) -> _FakeAsyncContextManager:
         return _FakeAsyncContextManager(_FakeSession())
 
 
