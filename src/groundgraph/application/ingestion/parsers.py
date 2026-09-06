@@ -1,16 +1,22 @@
 """Document parsers for supported formats.
 
 Each parser returns a structured ``ParsedContent`` that the chunker consumes.
-PDF, DOCX, and EPUB are noted as deferred (M3 acceptance criteria covers
-Markdown, text, and HTML as the primary formats).
+Parsers may raise ``UnsupportedFormatError`` to signal a typed reason code
+when the format cannot be processed.
 """
 
 from __future__ import annotations
 
+import io
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import ClassVar
+
+import docx  # pyright: ignore[reportMissingTypeStubs]
+from ebooklib import epub  # pyright: ignore[reportMissingTypeStubs]
+from pypdf import PdfReader  # pyright: ignore[reportMissingTypeStubs]
 
 
 def _metadata_default() -> dict[str, object]:
@@ -342,6 +348,236 @@ class HtmlParser(BaseParser):
         return results
 
 
+class UnsupportedReason(StrEnum):
+    UNSUPPORTED_MEDIA_TYPE = "unsupported_media_type"
+    PDF_ENCRYPTED = "pdf_encrypted"
+    PDF_SCANNED_ONLY = "pdf_scanned_only"
+    PDF_NO_TEXT_LAYER = "pdf_no_text_layer"
+    DOCX_PARSE_ERROR = "docx_parse_error"
+    EPUB_PARSE_ERROR = "epub_parse_error"
+    EMPTY_CONTENT = "empty_content"
+    PARSE_ERROR = "parse_error"
+
+
+@dataclass
+class UnsupportedFormatError(Exception):
+    reason: UnsupportedReason
+    detail: str = ""
+
+    def __str__(self) -> str:
+        if self.detail:
+            return f"{self.reason.value}: {self.detail}"
+        return self.reason.value
+
+
+class PdfParser(BaseParser):
+    @property
+    def media_type(self) -> str:
+        return "application/pdf"
+
+    def parse(self, content: bytes) -> ParsedContent:  # type: ignore[return-type]
+        try:
+            reader = PdfReader(io.BytesIO(content))
+        except Exception as exc:
+            raise UnsupportedFormatError(UnsupportedReason.PARSE_ERROR, str(exc)) from exc
+
+        if reader.is_encrypted:
+            raise UnsupportedFormatError(UnsupportedReason.PDF_ENCRYPTED)
+
+        lines: list[str] = []
+        code_blocks: list[tuple[int, int]] = []
+        in_code = False
+        code_start = 0
+
+        for page in reader.pages:
+            text = page.extract_text()
+            if not text or not text.strip():
+                continue
+            page_lines = text.splitlines()
+            for line in page_lines:
+                line_no = len(lines) + 1
+                stripped = line.strip()
+                if stripped.startswith("```"):
+                    if not in_code:
+                        in_code = True
+                        code_start = line_no
+                    else:
+                        in_code = False
+                        code_blocks.append((code_start, line_no))
+                    continue
+                if not in_code:
+                    lines.append(line + "\n")
+
+        body = "".join(lines)
+
+        if not body.strip():
+            raise UnsupportedFormatError(UnsupportedReason.PDF_NO_TEXT_LAYER)
+
+        return ParsedContent(
+            title=self._title_from_first_line(body) or "PDF page 1",
+            body=body,
+            media_type=self.media_type,
+            metadata={"page_count": len(reader.pages)},
+            code_blocks=code_blocks,
+        )
+
+    def _title_from_first_line(self, body: str) -> str:
+        first = body.split("\n", maxsplit=1)[0].strip()
+        return first[:120] if first else ""
+
+
+class DocxParser(BaseParser):
+    @property
+    def media_type(self) -> str:
+        return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+    def parse(self, content: bytes) -> ParsedContent:
+        try:
+            document = docx.document.Document(io.BytesIO(content))
+        except Exception as exc:
+            raise UnsupportedFormatError(UnsupportedReason.DOCX_PARSE_ERROR, str(exc)) from exc
+
+        lines: list[str] = []
+        code_blocks: list[tuple[int, int]] = []
+        in_code = False
+        code_start = 0
+
+        for para in document.paragraphs:
+            text = para.text
+            if not text.strip():
+                lines.append("\n")
+                continue
+            line_no = len(lines) + 1
+            stripped = text.strip()
+            if stripped.startswith("```"):
+                if not in_code:
+                    in_code = True
+                    code_start = line_no
+                else:
+                    in_code = False
+                    code_blocks.append((code_start, line_no))
+                lines.append(text + "\n")
+            elif in_code:
+                lines.append(text + "\n")
+            elif para.style and "Code" in para.style.name:
+                lines.append(f"```\n{text}\n```\n")
+            else:
+                lines.append(text + "\n")
+
+        body = "".join(lines)
+
+        row_count = sum(len(table.rows) for table in document.tables)
+        tables: list[tuple[int, int]] = [(0, row_count)] if row_count > 0 else []
+
+        title = document.core_properties.title or ""
+        if not title:
+            first = body.split("\n", maxsplit=1)[0].strip()
+            title = first[:120] if first else "untitled"
+
+        if not body.strip():
+            raise UnsupportedFormatError(UnsupportedReason.EMPTY_CONTENT)
+
+        return ParsedContent(
+            title=title,
+            body=body,
+            media_type=self.media_type,
+            metadata={
+                "paragraph_count": len(document.paragraphs),
+                "table_count": len(document.tables),
+            },
+            code_blocks=code_blocks,
+            tables=tables,
+        )
+
+
+class EpubParser(BaseParser):
+    MAX_HEADING_LEVEL = 6
+
+    @property
+    def media_type(self) -> str:
+        return "application/epub+zip"
+
+    def parse(self, content: bytes) -> ParsedContent:
+        try:
+            book = epub.read_epub(io.BytesIO(content))
+        except Exception as exc:
+            raise UnsupportedFormatError(UnsupportedReason.EPUB_PARSE_ERROR, str(exc)) from exc
+
+        title_meta = book.get_metadata("DC", "title")
+        if title_meta:
+            title_str = title_meta[0] if isinstance(title_meta, list) else str(title_meta)
+        else:
+            title_str = "untitled"
+
+        body_parts, code_blocks, headings = self._extract_epub_content(book)
+
+        body = "".join(body_parts)
+
+        if not body.strip():
+            raise UnsupportedFormatError(UnsupportedReason.EMPTY_CONTENT)
+
+        return ParsedContent(
+            title=title_str[:120] if title_str else "untitled",
+            body=body,
+            media_type=self.media_type,
+            metadata={"chapter_count": len(list(book.get_items()))},
+            headings=headings,
+            code_blocks=code_blocks,
+        )
+
+    def _extract_epub_content(
+        self, book: object
+    ) -> tuple[list[str], list[tuple[int, int]], list[tuple[int, str]]]:
+        body_parts: list[str] = []
+        code_blocks: list[tuple[int, int]] = []
+        headings: list[tuple[int, str]] = []
+        in_code = False
+        code_start = 0
+        line_offset = 0
+
+        for item in book.get_items():
+            if item.get_type() != epub.ITEM_DOCUMENT:
+                continue
+            try:
+                item_content = item.get_content().decode("utf-8", errors="replace")
+            except Exception:
+                continue
+
+            text = self._strip_html_tags(item_content)
+            if not text.strip():
+                continue
+
+            lines = text.splitlines()
+            for line in lines:
+                line_no = line_offset + 1
+                stripped = line.strip()
+                if stripped.startswith("#"):
+                    level = len(stripped) - len(stripped.lstrip("#"))
+                    heading_text = stripped.lstrip("#").strip()
+                    if 1 <= level <= self.MAX_HEADING_LEVEL:
+                        headings.append((level, heading_text))
+                    body_parts.append(line + "\n")
+                elif stripped.startswith("```"):
+                    if not in_code:
+                        in_code = True
+                        code_start = line_no
+                    else:
+                        in_code = False
+                        code_blocks.append((code_start, line_no))
+                    body_parts.append(line + "\n")
+                else:
+                    body_parts.append(line + "\n")
+
+                line_offset = line_no
+
+        return body_parts, code_blocks, headings
+
+    def _strip_html_tags(self, html: str) -> str:
+        text = re.sub(r"<[^>]+>", "", html)
+        text = re.sub(r"\s+", " ", text)
+        return text.strip()
+
+
 class ParserRegistry:
     _parsers: ClassVar[dict[str, BaseParser]] = {}
 
@@ -353,6 +589,20 @@ class ParserRegistry:
     def get(cls, media_type: str) -> BaseParser | None:
         return cls._parsers.get(media_type)
 
+    @classmethod
+    def get_with_reason(cls, media_type: str) -> BaseParser:
+        parser = cls._parsers.get(media_type)
+        if parser is None:
+            raise UnsupportedFormatError(UnsupportedReason.UNSUPPORTED_MEDIA_TYPE, media_type)
+        return parser
 
-for _parser_cls in (TextParser, MarkdownParser, HtmlParser):
+
+for _parser_cls in (
+    TextParser,
+    MarkdownParser,
+    HtmlParser,
+    PdfParser,
+    DocxParser,
+    EpubParser,
+):
     ParserRegistry.register(_parser_cls())

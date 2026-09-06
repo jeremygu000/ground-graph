@@ -201,9 +201,7 @@ class IngestionService:
         return await asyncio.to_thread(_read)
 
     def _parse(self, content: bytes, media_type: str) -> ParsedContent:
-        parser = ParserRegistry.get(media_type)
-        if parser is None:
-            raise ValueError(f"Unsupported media type: {media_type}")
+        parser = ParserRegistry.get_with_reason(media_type)
         return parser.parse(content)
 
     @staticmethod
