@@ -46,7 +46,8 @@ SET f.subject_id = $subject_id,
     f.observed_at = $observed_at,
     f.extraction_method = $extraction_method,
     f.ontology_version = $ontology_version,
-    f.allowed_principals = $allowed_principals
+    f.allowed_principals = $allowed_principals,
+    f.tenant_id = $tenant_id
 WITH f
 MATCH (s:Entity {entity_id: $subject_id})
 MERGE (s)-[r:SUBJECT_OF]->(f)
@@ -123,6 +124,7 @@ def _dict_to_fact(node: dict[str, Any]) -> KnowledgeFact:
         extraction_method=node["extraction_method"],
         ontology_version=node["ontology_version"],
         allowed_principals=node.get("allowed_principals", []),
+        tenant_id=node["tenant_id"],
     )
 
 
@@ -220,6 +222,7 @@ class Neo4jGraphRepository:
             "extraction_method": fact.extraction_method,
             "ontology_version": fact.ontology_version,
             "allowed_principals": fact.allowed_principals,
+            "tenant_id": fact.tenant_id,
         }
         await self._run_write(_FACT_MERGE, **params)
         return fact
@@ -238,6 +241,8 @@ class Neo4jGraphRepository:
         object_id: UUID | None = None,
         status: str | None = None,
         allowed_principals: list[str] | None = None,
+        *,
+        tenant_id: str | None = None,
     ) -> list[KnowledgeFact]:
         conditions: list[str] = []
         params: dict[str, Any] = {}
@@ -253,6 +258,9 @@ class Neo4jGraphRepository:
         if status:
             conditions.append("f.status = $status")
             params["status"] = status
+        if tenant_id is not None:
+            conditions.append("f.tenant_id = $tenant_id")
+            params["tenant_id"] = tenant_id
         if allowed_principals is not None:
             conditions.append(
                 "any(p IN $allowed_principals "

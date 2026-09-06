@@ -126,6 +126,8 @@ async def test_project_fact_event() -> None:
             "observed_at": now.isoformat(),
             "extraction_method": "llm",
             "ontology_version": "v0.1.0",
+            "tenant_id": "test-tenant",
+            "allowed_principals": ["eng"],
         },
     )
 

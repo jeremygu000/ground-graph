@@ -230,6 +230,8 @@ class GraphRepository(Protocol):
         object_id: UUID | None = None,
         status: str | None = None,
         allowed_principals: list[str] | None = None,
+        *,
+        tenant_id: str | None = None,
     ) -> list[KnowledgeFact]: ...
 
     async def update_fact_status(

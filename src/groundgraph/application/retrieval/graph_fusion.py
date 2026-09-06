@@ -79,6 +79,7 @@ class GraphFusionService:
                 valid_at,
                 max_depth,
                 allowed_principals,
+                tenant_id=tenant_id,
             )
             for entry in facts:
                 fact = entry["fact"]
@@ -119,6 +120,8 @@ class GraphFusionService:
         valid_at: datetime | None,
         max_depth: int,
         allowed_principals: list[str] | None,
+        *,
+        tenant_id: str | None,
     ) -> list[_FactWithNames]:
         results: list[_FactWithNames] = []
         seen: set[UUID] = set()
@@ -137,6 +140,7 @@ class GraphFusionService:
                 predicate=predicates[0] if predicates else None,
                 status="verified",
                 allowed_principals=allowed_principals,
+                tenant_id=tenant_id,
             )
             for fact in facts:
                 if fact.fact_id in seen:
@@ -161,6 +165,7 @@ class GraphFusionService:
                 predicate=predicates[0] if predicates else None,
                 status="verified",
                 allowed_principals=allowed_principals,
+                tenant_id=tenant_id,
             )
             for fact in facts_as_obj:
                 if fact.fact_id in seen:

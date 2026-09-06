@@ -32,7 +32,16 @@ class _FakeChunk:
 
 
 class _FakeRepo:
-    async def find_facts(self, subject_id=None, object_id=None, predicate=None, status=None):
+    async def find_facts(
+        self,
+        subject_id=None,
+        object_id=None,
+        predicate=None,
+        status=None,
+        allowed_principals=None,
+        *,
+        tenant_id=None,
+    ):
         return []
 
 
@@ -271,7 +280,14 @@ class _FactWithMeta:
 
 class _RepoWithFacts:
     async def find_facts(
-        self, subject_id=None, object_id=None, predicate=None, status=None, allowed_principals=None
+        self,
+        subject_id=None,
+        object_id=None,
+        predicate=None,
+        status=None,
+        allowed_principals=None,
+        *,
+        tenant_id=None,
     ):
         return []
 
@@ -285,7 +301,14 @@ class _RepoReturnsFacts(_RepoWithFacts):
         self._entities = entities or {}
 
     async def find_facts(
-        self, subject_id=None, object_id=None, predicate=None, status=None, allowed_principals=None
+        self,
+        subject_id=None,
+        object_id=None,
+        predicate=None,
+        status=None,
+        allowed_principals=None,
+        *,
+        tenant_id=None,
     ):
         return self._facts
 

@@ -140,6 +140,8 @@ def test_helper_functions_round_trip() -> None:
             "observed_at": now,
             "extraction_method": "structured",
             "ontology_version": "v1",
+            "tenant_id": "test-tenant",
+            "allowed_principals": ["eng"],
         }
     )
     assert isinstance(fact, KnowledgeFact)
@@ -292,6 +294,8 @@ async def test_bound_transaction_reuses_same_tx_for_update_and_read() -> None:
         observed_at=datetime.now(UTC),
         extraction_method="structured",
         ontology_version="v1",
+        tenant_id="test-tenant",
+        allowed_principals=["eng"],
     )
     session.response = _FakeResult(
         single_row={
@@ -308,6 +312,8 @@ async def test_bound_transaction_reuses_same_tx_for_update_and_read() -> None:
                 "observed_at": updated_fact.observed_at,
                 "extraction_method": updated_fact.extraction_method,
                 "ontology_version": updated_fact.ontology_version,
+                "tenant_id": updated_fact.tenant_id,
+                "allowed_principals": updated_fact.allowed_principals,
             }
         }
     )
@@ -341,6 +347,8 @@ async def test_create_get_find_fact_and_status_update() -> None:
         observed_at=valid_from,
         extraction_method="structured",
         ontology_version="v1",
+        tenant_id="test-tenant",
+        allowed_principals=["eng"],
     )
 
     tx = await session.begin_transaction()
@@ -362,6 +370,8 @@ async def test_create_get_find_fact_and_status_update() -> None:
                 "observed_at": fact.observed_at,
                 "extraction_method": fact.extraction_method,
                 "ontology_version": fact.ontology_version,
+                "tenant_id": "test-tenant",
+                "allowed_principals": ["eng"],
             }
         }
     )
@@ -383,6 +393,8 @@ async def test_create_get_find_fact_and_status_update() -> None:
                     "observed_at": fact.observed_at,
                     "extraction_method": fact.extraction_method,
                     "ontology_version": fact.ontology_version,
+                    "tenant_id": "test-tenant",
+                    "allowed_principals": ["eng"],
                 }
             }
         ]
@@ -406,6 +418,8 @@ async def test_create_get_find_fact_and_status_update() -> None:
                 "observed_at": fact.observed_at,
                 "extraction_method": fact.extraction_method,
                 "ontology_version": fact.ontology_version,
+                "tenant_id": "test-tenant",
+                "allowed_principals": ["eng"],
             }
         }
     )

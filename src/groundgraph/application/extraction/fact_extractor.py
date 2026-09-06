@@ -66,6 +66,9 @@ class FactExtractor:
         name_to_id: dict[str, UUID],
         evidence_ids: list[UUID],
         ontology_version: str | None = None,
+        *,
+        tenant_id: str | None = None,
+        allowed_principals: list[str] | None = None,
     ) -> list[KnowledgeFact]:
         """Extract facts from text given entity surface forms and their IDs.
 
@@ -130,6 +133,8 @@ class FactExtractor:
                 observed_at=now,
                 extraction_method="llm",
                 ontology_version=version,
+                tenant_id=tenant_id or "",
+                allowed_principals=allowed_principals or [],
             )
             facts.append(fact)
 

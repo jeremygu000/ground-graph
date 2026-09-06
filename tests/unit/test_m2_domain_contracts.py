@@ -195,6 +195,8 @@ class TestKnowledgeContracts:
             observed_at=datetime(2024, 6, 1, tzinfo=UTC),
             extraction_method="llm",
             ontology_version="v0.1.0",
+            tenant_id="test-tenant",
+            allowed_principals=["eng"],
         )
         data = fact.model_dump()
         restored = KnowledgeFact.model_validate(data)
@@ -212,6 +214,8 @@ class TestKnowledgeContracts:
                 observed_at=datetime.now(UTC),
                 extraction_method="llm",
                 ontology_version="v0.1.0",
+                tenant_id="test-tenant",
+                allowed_principals=[],
             )
 
     def test_knowledge_fact_reversed_validity_window(self) -> None:
@@ -228,6 +232,8 @@ class TestKnowledgeContracts:
                 observed_at=datetime(2024, 6, 1, tzinfo=UTC),
                 extraction_method="llm",
                 ontology_version="v0.1.0",
+                tenant_id="test-tenant",
+                allowed_principals=[],
             )
 
     def test_knowledge_fact_naive_datetime_rejected(self) -> None:
@@ -244,6 +250,8 @@ class TestKnowledgeContracts:
                 observed_at=datetime(2024, 6, 1, tzinfo=UTC),
                 extraction_method="llm",
                 ontology_version="v0.1.0",
+                tenant_id="test-tenant",
+                allowed_principals=[],
             )
 
     def test_verified_fact_requires_evidence(self) -> None:
@@ -259,6 +267,8 @@ class TestKnowledgeContracts:
                 observed_at=datetime(2024, 6, 1, tzinfo=UTC),
                 extraction_method="human",
                 ontology_version="v0.1.0",
+                tenant_id="test-tenant",
+                allowed_principals=[],
             )
 
 

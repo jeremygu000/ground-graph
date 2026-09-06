@@ -68,7 +68,17 @@ async def test_build_and_invoke_extraction_graph() -> None:
             )
 
     class _FakeFactExtractor:
-        async def extract_facts(self, text, entities, subject_id, evidence_ids):
+        async def extract_facts(
+            self,
+            text,
+            entities,
+            subject_id,
+            evidence_ids,
+            ontology_version=None,
+            *,
+            tenant_id=None,
+            allowed_principals=None,
+        ):
             return []
 
     emitter = _FakeEmitter()
@@ -112,7 +122,17 @@ async def test_extraction_graph_ambiguous_entity() -> None:
             return None
 
     class _FakeFactExtractor:
-        async def extract_facts(self, text, entities, subject_id, evidence_ids):
+        async def extract_facts(
+            self,
+            text,
+            entities,
+            subject_id,
+            evidence_ids,
+            ontology_version=None,
+            *,
+            tenant_id=None,
+            allowed_principals=None,
+        ):
             return []
 
     emitter = _FakeEmitter()
@@ -168,7 +188,17 @@ async def test_extraction_graph_emits_facts() -> None:
             )
 
     class _FakeFactExtractor:
-        async def extract_facts(self, text, entities, name_to_id, evidence_ids):
+        async def extract_facts(
+            self,
+            text,
+            entities,
+            name_to_id,
+            evidence_ids,
+            ontology_version=None,
+            *,
+            tenant_id=None,
+            allowed_principals=None,
+        ):
             redis_id = name_to_id.get("Redis", uuid4())
             auth_id = name_to_id.get("AuthService", uuid4())
             return [
@@ -183,6 +213,8 @@ async def test_extraction_graph_emits_facts() -> None:
                     observed_at=datetime.now(UTC),
                     extraction_method="llm",
                     ontology_version="v0.1.0",
+                    tenant_id=tenant_id or "test-tenant",
+                    allowed_principals=allowed_principals or ["eng"],
                 )
             ]
 

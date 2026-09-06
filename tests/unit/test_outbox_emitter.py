@@ -81,6 +81,8 @@ async def test_emit_fact_adds_event() -> None:
         observed_at=datetime.now(UTC),
         extraction_method="llm",
         ontology_version="v0.1.0",
+        tenant_id="test-tenant",
+        allowed_principals=["eng"],
     )
 
     await emitter.emit_fact(fact)

@@ -91,6 +91,7 @@ class OutboxGraphProjector:
             observed_at=payload.get("observed_at") or datetime.now(UTC),
             extraction_method=payload.get("extraction_method", "llm"),
             ontology_version=payload.get("ontology_version", "v0.1.0"),
+            tenant_id=payload["tenant_id"],
             allowed_principals=payload.get("allowed_principals", []),
         )
         await self._graph.create_fact(fact)

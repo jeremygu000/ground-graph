@@ -101,6 +101,8 @@ class _FakeGraphRepo:
         object_id: UUID | None = None,
         status: str | None = None,
         allowed_principals: list[str] | None = None,
+        *,
+        tenant_id: str | None = None,
     ) -> list[Any]:
         return []
 

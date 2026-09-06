@@ -74,6 +74,8 @@ class OutboxEmitter:
                 "observed_at": fact.observed_at.isoformat() if fact.observed_at else None,
                 "extraction_method": fact.extraction_method,
                 "ontology_version": fact.ontology_version,
+                "tenant_id": fact.tenant_id,
+                "allowed_principals": fact.allowed_principals,
             },
             status="pending",
         )

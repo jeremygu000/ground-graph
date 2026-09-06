@@ -736,15 +736,14 @@ async def test_fact_create_and_fetch(neo4j_component: Any) -> None:
             observed_at=datetime.now(UTC),
             extraction_method="structured",
             ontology_version="v0.1.0",
+            tenant_id="test-tenant",
+            allowed_principals=["engineering"],
         )
-        async with Neo4jUnitOfWork(driver) as uow:
-            repo = uow.graph
-            assert repo is not None
-            await repo.create_entity(subject)
-            await repo.create_entity(obj)
-            await repo.create_fact(fact)
 
         repo = Neo4jGraphRepository(driver)
+        await repo.create_entity(subject)
+        await repo.create_entity(obj)
+        await repo.create_fact(fact)
         result = await repo.get_fact(fact.fact_id)
         assert result is not None
         assert result.predicate == "DEPENDS_ON"
@@ -816,6 +815,8 @@ async def test_find_facts_datetime_conversion(neo4j_component: Any) -> None:
             observed_at=observed,
             extraction_method="llm",
             ontology_version="v0.1.0",
+            tenant_id="test-tenant",
+            allowed_principals=["engineering"],
         )
         async with Neo4jUnitOfWork(driver) as uow:
             repo = uow.graph

@@ -16,6 +16,7 @@ from uuid import UUID
 
 from langgraph.graph import END, START, StateGraph
 
+from groundgraph.domain.defaults import empty_str_list
 from groundgraph.domain.knowledge import CanonicalEntity, EntityMention, KnowledgeFact
 
 
@@ -24,6 +25,7 @@ class ExtractionState:
     chunk_id: UUID | None = None
     chunk_content: str = ""
     tenant_id: str = ""
+    allowed_principals: list[str] = field(default_factory=empty_str_list)
 
     entities: list[EntityMention] = field(default_factory=list)
     resolved_entities: list[CanonicalEntity] = field(default_factory=list)
@@ -72,6 +74,8 @@ def build_extraction_graph(
             surface_forms,
             name_to_id,
             evidence_ids,
+            tenant_id=state.tenant_id,
+            allowed_principals=state.allowed_principals,
         )
         return ExtractionState(**{**state.__dict__, "facts": facts})
 
