@@ -93,6 +93,13 @@ class _FakeDocumentRepository:
     async def create_chunk(self, chunk: Chunk) -> None:
         self.chunks.append(chunk)
 
+    async def list_chunks(self, document_id: Any, version_id: Any) -> list[Chunk]:
+        return [
+            chunk
+            for chunk in self.chunks
+            if chunk.document_id == document_id and chunk.version_id == version_id
+        ]
+
     async def get_document(self, document_id: Any) -> ParsedDocument | None:
         for doc in self.documents:
             if doc.document_id == document_id:

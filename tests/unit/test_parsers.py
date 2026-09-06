@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
+import io
+import tempfile
+from typing import Any, cast
+
 import pytest
+from docx import Document  # pyright: ignore[reportMissingTypeStubs]
+from ebooklib import epub  # pyright: ignore[reportMissingTypeStubs]
 
 from groundgraph.application.ingestion.parsers import (
     DocxParser,
@@ -17,6 +23,63 @@ from groundgraph.application.ingestion.parsers import (
     UnsupportedFormatError,
     UnsupportedReason,
 )
+
+
+def _pdf_fixture() -> bytes:
+    stream = b"BT /F1 18 Tf 72 720 Td (Golden PDF) Tj 0 -30 Td (PDF body) Tj ET\n"
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        (
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+            b"/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>"
+        ),
+        b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream + b"endstream",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]
+    document = bytearray(b"%PDF-1.4\n")
+    offsets = [0]
+    for number, obj in enumerate(objects, start=1):
+        offsets.append(len(document))
+        document.extend(f"{number} 0 obj\n".encode())
+        document.extend(obj)
+        document.extend(b"\nendobj\n")
+    xref = len(document)
+    document.extend(f"xref\n0 {len(objects) + 1}\n".encode())
+    document.extend(b"0000000000 65535 f \n")
+    for offset in offsets[1:]:
+        document.extend(f"{offset:010d} 00000 n \n".encode())
+    document.extend(
+        f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode()
+    )
+    return bytes(document)
+
+
+def _docx_fixture() -> bytes:
+    document = Document()
+    document.core_properties.title = "Golden DOCX"
+    document.add_heading("Golden DOCX", level=1)
+    document.add_paragraph("DOCX body")
+    output = io.BytesIO()
+    document.save(output)
+    return output.getvalue()
+
+
+def _epub_fixture() -> bytes:
+    book = epub.EpubBook()
+    book.set_identifier("golden")
+    book.set_title("Golden EPUB")
+    book.set_language("en")
+    chapter = epub.EpubHtml(title="Golden EPUB", file_name="chapter.xhtml", lang="en")
+    chapter.content = "<h1>Golden EPUB</h1><p>EPUB body</p>"
+    book.add_item(chapter)
+    book.add_item(epub.EpubNcx())
+    book.add_item(epub.EpubNav())
+    book.spine = ["nav", chapter]
+    with tempfile.NamedTemporaryFile(suffix=".epub") as output:
+        epub.write_epub(output.name, book)
+        output.seek(0)
+        return output.read()
 
 
 class TestTextParser:
@@ -141,6 +204,13 @@ class TestHtmlParser:
 
 
 class TestPdfParser:
+    def test_parses_minimal_valid_pdf(self) -> None:
+        result = PdfParser().parse(_pdf_fixture())
+
+        assert result.title == "Golden PDF"
+        assert "PDF body" in result.body
+        assert result.metadata["page_count"] == 1
+
     def test_empty_pdf_raises_parse_error(self) -> None:
         content = b""
         with pytest.raises(UnsupportedFormatError) as exc_info:
@@ -149,6 +219,13 @@ class TestPdfParser:
 
 
 class TestDocxParser:
+    def test_parses_minimal_valid_docx(self) -> None:
+        result = DocxParser().parse(_docx_fixture())
+
+        assert result.title == "Golden DOCX"
+        assert "DOCX body" in result.body
+        assert int(cast(Any, result.metadata["paragraph_count"])) >= 2
+
     def test_malformed_docx_raises(self) -> None:
         content = b"not a valid docx"
         with pytest.raises(UnsupportedFormatError) as exc_info:
@@ -163,6 +240,13 @@ class TestDocxParser:
 
 
 class TestEpubParser:
+    def test_parses_minimal_valid_epub(self) -> None:
+        result = EpubParser().parse(_epub_fixture())
+
+        assert result.title == "Golden EPUB"
+        assert "Golden EPUB" in result.body
+        assert "EPUB body" in result.body
+
     def test_empty_epub_raises(self) -> None:
         content = b""
         with pytest.raises(UnsupportedFormatError) as exc_info:

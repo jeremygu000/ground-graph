@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
 if TYPE_CHECKING:
+    from opentelemetry.metrics import Counter, Histogram, Meter
     from opentelemetry.trace import Tracer
 
 from groundgraph.application.ports import IngestionUnitOfWork, ObjectStore
@@ -25,14 +26,6 @@ from groundgraph.domain.evidence import OutboxEvent, OutboxEventType
 
 from .chunker import Chunker
 from .parsers import ParsedContent, ParserRegistry
-
-
-@dataclass(frozen=True)
-class IngestionResult:
-    document_id: UUID
-    version_id: UUID
-    created_new_version: bool
-    tenant_id: str
 
 
 @dataclass(frozen=True)
@@ -67,6 +60,15 @@ class IngestionReport:
         return round(self.empty_chunk_count / self.chunk_count, 3)
 
 
+@dataclass(frozen=True)
+class IngestionResult:
+    document_id: UUID
+    version_id: UUID
+    created_new_version: bool
+    tenant_id: str
+    quality_report: IngestionReport | None = None
+
+
 class IngestionService:
     def __init__(
         self,
@@ -74,11 +76,24 @@ class IngestionService:
         object_store: ObjectStore,
         chunker: Chunker | None = None,
         tracer: Tracer | None = None,
+        meter: Meter | None = None,
     ) -> None:
         self._uow_factory = uow_factory
         self._object_store = object_store
         self._chunker = chunker or Chunker()
         self._tracer = tracer
+        self._ingestion_runs: Counter | None = None
+        self._ingestion_duration: Histogram | None = None
+        if meter is not None:
+            self._ingestion_runs = meter.create_counter(
+                "groundgraph.ingestion.runs",
+                description="Ingestion runs by outcome.",
+            )
+            self._ingestion_duration = meter.create_histogram(
+                "groundgraph.ingestion.duration",
+                description="Ingestion run duration in milliseconds.",
+                unit="ms",
+            )
 
     async def ingest_file(
         self,
@@ -86,6 +101,8 @@ class IngestionService:
         file_path: str,
         media_type: str,
     ) -> IngestionResult:
+        started = time.perf_counter()
+        succeeded = False
         tracer = self._tracer
         if tracer:
             span = tracer.start_span("rag.ingestion")
@@ -95,8 +112,31 @@ class IngestionService:
         else:
             span = None
         try:
-            return await self._ingest_file_impl(source_id, file_path, media_type, span)
+            result, source_size_bytes = await self._ingest_file_impl(
+                source_id, file_path, media_type, span
+            )
+            duration_ms = (time.perf_counter() - started) * 1000
+            report = await self.generate_report(
+                source_id=source_id,
+                result=result,
+                source_size_bytes=source_size_bytes,
+                duration_ms=duration_ms,
+                media_type=media_type,
+            )
+            succeeded = True
+            return IngestionResult(
+                document_id=result.document_id,
+                version_id=result.version_id,
+                created_new_version=result.created_new_version,
+                tenant_id=result.tenant_id,
+                quality_report=report,
+            )
         finally:
+            duration_ms = (time.perf_counter() - started) * 1000
+            if self._ingestion_runs is not None:
+                self._ingestion_runs.add(1, {"status": "success" if succeeded else "failure"})
+            if self._ingestion_duration is not None:
+                self._ingestion_duration.record(duration_ms)
             if span:
                 span.end()
 
@@ -106,7 +146,7 @@ class IngestionService:
         file_path: str,
         media_type: str,
         span: Any,
-    ) -> IngestionResult:
+    ) -> tuple[IngestionResult, int]:
         raw_bytes, checksum, canonical_locator, source = await self._acquire_and_validate(
             source_id, file_path, span
         )
@@ -134,7 +174,7 @@ class IngestionService:
                         span.set_attribute("ingestion.resumed", True)
                         span.set_attribute("document_id", str(result.document_id))
                         span.set_attribute("version_id", str(result.version_id))
-                    return result
+                    return result, len(raw_bytes)
 
             existing = await uow.documents.find_active_document_by_canonical_locator(
                 source_id, canonical_locator
@@ -161,7 +201,7 @@ class IngestionService:
                         span.set_attribute("ingestion.idempotent_hit", True)
                         span.set_attribute("document_id", str(doc_id))
                         span.set_attribute("version_id", str(ver_id))
-                    return result
+                    return result, len(raw_bytes)
                 document_id, version_id = doc_id, uuid4()
             else:
                 document_id, version_id = uuid4(), uuid4()
@@ -236,11 +276,14 @@ class IngestionService:
                 span.set_attribute("document_id", str(canonical_doc_id))
                 span.set_attribute("version_id", str(canonical_version_id))
 
-            return IngestionResult(
-                document_id=canonical_doc.document_id,
-                version_id=canonical_doc.version_id,
-                created_new_version=is_new_version,
-                tenant_id=source.tenant_id,
+            return (
+                IngestionResult(
+                    document_id=canonical_doc.document_id,
+                    version_id=canonical_doc.version_id,
+                    created_new_version=is_new_version,
+                    tenant_id=source.tenant_id,
+                ),
+                len(raw_bytes),
             )
 
     MAX_FILE_SIZE = 100 * 1024 * 1024
@@ -294,13 +337,14 @@ class IngestionService:
     def _sha256(data: bytes) -> str:
         return hashlib.sha256(data).hexdigest()
 
-    async def generate_report(
+    async def generate_report(  # noqa: PLR0917
         self,
         source_id: UUID,
         result: IngestionResult,
         source_size_bytes: int,
         duration_ms: float,
         parse_error: str | None = None,
+        media_type: str = "",
     ) -> IngestionReport:
         """Generate an ingestion quality report (plan.md §6.6).
 
@@ -332,7 +376,7 @@ class IngestionService:
             source_id=source_id,
             document_id=result.document_id,
             version_id=result.version_id,
-            media_type="",  # not tracked at this level
+            media_type=media_type,
             parse_success=parse_error is None,
             parse_error=parse_error,
             source_size_bytes=source_size_bytes,

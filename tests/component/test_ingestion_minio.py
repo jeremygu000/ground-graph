@@ -170,6 +170,7 @@ async def test_full_pipeline_ingest_to_s3_and_pg(
                 assert doc is not None
                 chunks = await uow.documents.list_chunks(result.document_id, result.version_id)
                 assert len(chunks) > 0
+                assert all(c.allowed_principals == ["engineering"] for c in chunks)
                 pending = await uow.outbox.claim_batch(
                     batch_size=10,
                     worker_id="test-worker",
@@ -177,6 +178,9 @@ async def test_full_pipeline_ingest_to_s3_and_pg(
                 )
                 doc_events = [e for e in pending if e.aggregate_id == result.document_id]
                 assert len(doc_events) == 1
+
+            assert result.quality_report is not None
+            assert result.quality_report.chunk_count == len(chunks)
 
 
 @pytest.mark.asyncio

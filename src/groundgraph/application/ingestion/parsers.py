@@ -12,10 +12,10 @@ import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import ClassVar
+from typing import Any, ClassVar, cast
 
 import docx  # pyright: ignore[reportMissingTypeStubs]
-from ebooklib import epub  # pyright: ignore[reportMissingTypeStubs]
+from ebooklib import ITEM_DOCUMENT, epub  # pyright: ignore[reportMissingTypeStubs]
 from pypdf import PdfReader  # pyright: ignore[reportMissingTypeStubs]
 
 
@@ -375,7 +375,7 @@ class PdfParser(BaseParser):
     def media_type(self) -> str:
         return "application/pdf"
 
-    def parse(self, content: bytes) -> ParsedContent:  # type: ignore[return-type]
+    def parse(self, content: bytes) -> ParsedContent:
         try:
             reader = PdfReader(io.BytesIO(content))
         except Exception as exc:
@@ -433,7 +433,7 @@ class DocxParser(BaseParser):
 
     def parse(self, content: bytes) -> ParsedContent:
         try:
-            document = docx.document.Document(io.BytesIO(content))
+            document = docx.Document(io.BytesIO(content))
         except Exception as exc:
             raise UnsupportedFormatError(UnsupportedReason.DOCX_PARSE_ERROR, str(exc)) from exc
 
@@ -459,7 +459,7 @@ class DocxParser(BaseParser):
                 lines.append(text + "\n")
             elif in_code:
                 lines.append(text + "\n")
-            elif para.style and "Code" in para.style.name:
+            elif para.style and para.style.name and "Code" in para.style.name:
                 lines.append(f"```\n{text}\n```\n")
             else:
                 lines.append(text + "\n")
@@ -499,15 +499,13 @@ class EpubParser(BaseParser):
 
     def parse(self, content: bytes) -> ParsedContent:
         try:
-            book = epub.read_epub(io.BytesIO(content))
+            read_epub = cast(Any, epub).read_epub
+            book = read_epub(io.BytesIO(content))
         except Exception as exc:
             raise UnsupportedFormatError(UnsupportedReason.EPUB_PARSE_ERROR, str(exc)) from exc
 
-        title_meta = book.get_metadata("DC", "title")
-        if title_meta:
-            title_str = title_meta[0] if isinstance(title_meta, list) else str(title_meta)
-        else:
-            title_str = "untitled"
+        title_meta = cast(list[tuple[str, Any]], book.get_metadata("DC", "title"))
+        title_str = title_meta[0][0] if title_meta else "untitled"
 
         body_parts, code_blocks, headings = self._extract_epub_content(book)
 
@@ -526,7 +524,7 @@ class EpubParser(BaseParser):
         )
 
     def _extract_epub_content(
-        self, book: object
+        self, book: Any
     ) -> tuple[list[str], list[tuple[int, int]], list[tuple[int, str]]]:
         body_parts: list[str] = []
         code_blocks: list[tuple[int, int]] = []
@@ -536,7 +534,7 @@ class EpubParser(BaseParser):
         line_offset = 0
 
         for item in book.get_items():
-            if item.get_type() != epub.ITEM_DOCUMENT:
+            if item.get_type() != ITEM_DOCUMENT:
                 continue
             try:
                 item_content = item.get_content().decode("utf-8", errors="replace")

@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4
 
 import pytest
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExportResult
 
 from groundgraph.application.ingestion.chunker import Chunker
 from groundgraph.application.ingestion.parsers import UnsupportedFormatError
 from groundgraph.application.ingestion.services import IngestionReport, IngestionService
+from groundgraph.application.ports import IngestionUnitOfWork
 from groundgraph.domain.documents import (
     Chunk,
     IngestionCheckpoint,
@@ -242,6 +246,48 @@ class TestIngestionService:
         assert len(self.fake_docs.documents) == 1
         assert self.fake_docs.documents[0].title == "Hello"
         assert len(self.fake_store.put_raw_calls) == 1
+        assert result.quality_report is not None
+        assert result.quality_report.chunk_count == len(self.fake_docs.chunks)
+
+    async def test_ingestion_metrics_record_success_and_duration(self, tmp_path: Any) -> None:
+        source_id = uuid4()
+        self.fake_docs.set_source(
+            SourceDescriptor(
+                source_id=source_id,
+                source_type="filesystem",
+                uri=str(tmp_path),
+                classification="internal",
+                tenant_id="tenant-a",
+                allowed_principals=["engineering"],
+            )
+        )
+        file_path = tmp_path / "metrics.md"
+        file_path.write_bytes(b"# Metrics\n\nContent.")
+        reader = InMemoryMetricReader()
+        provider = MeterProvider(metric_readers=[reader])
+        service = IngestionService(
+            uow_factory=cast(
+                Callable[[], IngestionUnitOfWork],
+                lambda: _FakeIngestionUoW(self.fake_docs, self.fake_outbox, self.fake_checkpoint),
+            ),
+            object_store=self.fake_store,
+            meter=provider.get_meter("groundgraph.ingestion"),
+        )
+
+        await service.ingest_file(source_id, str(file_path), "text/markdown")
+
+        data = cast(Any, reader.get_metrics_data())
+        metrics = {
+            metric.name: metric
+            for resource_metrics in data.resource_metrics
+            for scope_metrics in resource_metrics.scope_metrics
+            for metric in scope_metrics.metrics
+        }
+        runs = metrics["groundgraph.ingestion.runs"]
+        assert runs.data.data_points[0].value == 1
+        assert dict(runs.data.data_points[0].attributes)["status"] == "success"
+        duration = metrics["groundgraph.ingestion.duration"]
+        assert duration.data.data_points[0].count == 1
 
     async def test_ingest_file_emits_outbox_event(self, tmp_path: Any) -> None:
         source_id = uuid4()
@@ -482,7 +528,7 @@ class TestIngestionTelemetry:
 
         exporter = _CapturingExporter()
         provider = TracerProvider()
-        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        provider.add_span_processor(SimpleSpanProcessor(cast(Any, exporter)))
         tracer = provider.get_tracer("test")
 
         source_id = uuid4()
@@ -500,8 +546,9 @@ class TestIngestionTelemetry:
         file_path.write_bytes(b"# Title\n\nContent here.")
 
         svc = IngestionService(
-            uow_factory=lambda: _FakeIngestionUoW(
-                self.fake_docs, self.fake_outbox, self.fake_checkpoint
+            uow_factory=cast(
+                Callable[[], IngestionUnitOfWork],
+                lambda: _FakeIngestionUoW(self.fake_docs, self.fake_outbox, self.fake_checkpoint),
             ),
             object_store=self.fake_store,
             chunker=Chunker(),
