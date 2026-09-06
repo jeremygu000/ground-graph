@@ -6,11 +6,14 @@ from uuid import uuid4
 
 from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletionMessageParam
+from opentelemetry.trace import get_tracer
 from pydantic import BaseModel
 
 from groundgraph.application.ports import AnswerGenerator
 from groundgraph.application.settings import Settings, get_settings
 from groundgraph.domain.retrieval import AnswerClaim, Citation, QueryResponse, RetrievalPlan
+
+_TRACER = get_tracer(__name__)
 
 
 class _ClaimOutput(BaseModel):
@@ -61,33 +64,42 @@ class EvidenceOnlyAnswerGenerator(AnswerGenerator):
         evidence: list,
         retrieval_plan: RetrievalPlan,
     ) -> QueryResponse:
-        if not evidence:
-            return QueryResponse(
-                execution_run_id=uuid4(),
-                answer=None,
-                status="insufficient_evidence",
-                claims=[],
-                citations=[],
-                confidence_band="low",
-                warnings=["No evidence retrieved"],
-            )
+        with _TRACER.start_as_current_span("answer.generate") as span:
+            span.set_attribute("answer.question_length", len(question))
+            span.set_attribute("answer.evidence_count", len(evidence))
+            span.set_attribute("answer.strategy", retrieval_plan.strategy)
 
-        evidence_context = self._build_evidence_context(evidence)
+            if not evidence:
+                return QueryResponse(
+                    execution_run_id=uuid4(),
+                    answer=None,
+                    status="insufficient_evidence",
+                    claims=[],
+                    citations=[],
+                    confidence_band="low",
+                    warnings=["No evidence retrieved"],
+                )
 
-        try:
-            response = await self._call_llm(question, evidence_context, evidence)
-        except Exception:
-            return QueryResponse(
-                execution_run_id=uuid4(),
-                answer=None,
-                status="failed",
-                claims=[],
-                citations=[],
-                confidence_band="low",
-                warnings=["Answer generation failed"],
-            )
+            evidence_context = self._build_evidence_context(evidence)
 
-        return self._build_response(response, evidence)
+            try:
+                response = await self._call_llm(question, evidence_context, evidence)
+            except Exception:
+                return QueryResponse(
+                    execution_run_id=uuid4(),
+                    answer=None,
+                    status="failed",
+                    claims=[],
+                    citations=[],
+                    confidence_band="low",
+                    warnings=["Answer generation failed"],
+                )
+
+            result = self._build_response(response, evidence)
+            span.set_attribute("answer.status", result.status)
+            span.set_attribute("answer.claim_count", len(result.claims))
+            span.set_attribute("answer.citation_count", len(result.citations))
+            return result
 
     def _build_evidence_context(self, evidence: list) -> str:
         parts = []

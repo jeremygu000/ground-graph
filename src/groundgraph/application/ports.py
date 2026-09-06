@@ -324,3 +324,19 @@ class OutboxConsumer(Protocol):
     async def mark_completed(self, event_id: UUID) -> None: ...
 
     async def mark_failed(self, event_id: UUID, error: str) -> None: ...
+
+
+class IndexVersionInfo(BaseModel):
+    """Immutable snapshot of an index version's embedding configuration."""
+
+    version_id: UUID
+    index_name: str
+    embedding_model: str
+    embedding_dimensions: int
+    is_active: bool
+
+
+class IndexVersionResolver(Protocol):
+    """Port for resolving the active index version for a given index name."""
+
+    async def resolve_active(self, index_name: str) -> IndexVersionInfo | None: ...

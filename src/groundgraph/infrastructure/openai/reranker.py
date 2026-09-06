@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from openai import AsyncOpenAI
+from opentelemetry.trace import get_tracer
 
 from groundgraph.application.ports import EvidenceReranker
 from groundgraph.application.settings import Settings, get_settings
 from groundgraph.domain.retrieval import Evidence
+
+_TRACER = get_tracer(__name__)
 
 
 class CrossEncoderReranker(EvidenceReranker):
@@ -34,22 +37,26 @@ class CrossEncoderReranker(EvidenceReranker):
         if len(evidence) <= 1:
             return list(evidence)
 
-        scored: list[tuple[Evidence, float]] = []
-        for ev in evidence:
-            score = await self._score_relevance(query, ev.content)
-            scored.append((ev, score))
+        with _TRACER.start_as_current_span("rerank.score_chunks") as span:
+            span.set_attribute("rerank.evidence_count", len(evidence))
+            span.set_attribute("rerank.query_length", len(query))
+            scored: list[tuple[Evidence, float]] = []
+            for ev in evidence:
+                score = await self._score_relevance(query, ev.content)
+                scored.append((ev, score))
 
-        scored.sort(key=lambda x: x[1], reverse=True)
-        reranked = []
-        for ev, _ in scored:
-            reranked.append(
-                ev.model_copy(
-                    update={
-                        "rerank_score": _,
-                    }
+            scored.sort(key=lambda x: x[1], reverse=True)
+            span.set_attribute("rerank.scored_count", len(scored))
+            reranked = []
+            for ev, _ in scored:
+                reranked.append(
+                    ev.model_copy(
+                        update={
+                            "rerank_score": _,
+                        }
+                    )
                 )
-            )
-        return reranked
+            return reranked
 
     async def _score_relevance(self, query: str, content: str) -> float:
         prompt = (

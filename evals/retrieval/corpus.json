@@ -45,7 +45,7 @@
     },
     {
       "chunkId": "00000000-0000-4000-8000-0000000000c5",
-      "content": "outbox_events stores pending, claimed, completed, or dead-letter events with idempotency keys, claim tokens, lease expiry, and bounded retry attempts.",
+      "content": "The outbox table stores pending, claimed, completed, or dead-letter events with idempotency keys, claim tokens, lease expiry, and bounded retry attempts.",
       "locator": {
         "type": "heading",
         "path": "docs/architecture.md"
@@ -115,7 +115,7 @@
     },
     {
       "chunkId": "00000000-0000-4000-8000-0000000000cc",
-      "content": "Documents are versioned through immutable document_versions rows. Each version has a monotonically increasing version number, a content hash, and a checksum; the row itself is never updated.",
+      "content": "Documents are versioned through immutable document_versions rows. Each version has a UUID identifier, a content hash, and a checksum; the row itself is never updated.",
       "locator": {
         "type": "heading",
         "path": "docs/architecture.md"
@@ -295,7 +295,7 @@
     },
     {
       "chunkId": "00000000-0000-4000-8000-0000000000de",
-      "content": "The lexical reranker blends the original vector score with token overlap (70% vector, 30% lexical) to give a deterministic improvement on keyword-heavy questions.",
+      "content": "The evidence reranker scores each chunk against the query using a GPT-based 1-5 relevance scale, then sorts evidence descending by relevance score.",
       "locator": {
         "type": "heading",
         "path": "docs/retrieval.md"

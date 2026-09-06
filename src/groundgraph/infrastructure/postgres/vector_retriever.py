@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
+from opentelemetry.trace import get_tracer
 from sqlalchemy import select
 
 from groundgraph.application.ports import VectorRetriever
@@ -15,6 +16,8 @@ from groundgraph.infrastructure.postgres.models import Document as DocumentModel
 from groundgraph.infrastructure.postgres.models import IndexVersion as IndexVersionModel
 from groundgraph.infrastructure.postgres.models import Source as SourceModel
 from groundgraph.infrastructure.postgres.session import PostgresSession
+
+_TRACER = get_tracer(__name__)
 
 
 @dataclass
@@ -68,6 +71,7 @@ class PostgresVectorRetriever(VectorRetriever):
             ChunkEmbeddingModel.index_version_id == active_index.version_id,
             SourceModel.is_active == True,  # noqa: E712
             SourceModel.tenant_id == tenant_id,
+            ChunkModel.version_id == DocumentModel.current_version_id,
         ]
 
         if allowed_principals is not None:
@@ -124,6 +128,7 @@ class PostgresVectorRetriever(VectorRetriever):
             ChunkEmbeddingModel.index_version_id == active_index.version_id,
             SourceModel.is_active == True,  # noqa: E712
             SourceModel.tenant_id == tenant_id,
+            ChunkModel.version_id == DocumentModel.current_version_id,
         ]
 
         if allowed_principals is not None:
@@ -153,19 +158,30 @@ class PostgresVectorRetriever(VectorRetriever):
             .limit(top_k)
         )
 
-        result = await self._session.execute(stmt)
-        return [
-            VectorSearchResult(
-                chunk_id=row.chunk_id,
-                source_id=row.source_id,
-                document_id=row.document_id,
-                version_id=row.version_id,
-                content=row.content,
-                score=row.distance,
-                allowed_principals=list(row.allowed_principals) if row.allowed_principals else [],
+        with _TRACER.start_as_current_span("vector.search") as span:
+            span.set_attribute("vector.top_k", top_k)
+            span.set_attribute("retrieval.tenant_id", tenant_id or "")
+            span.set_attribute(
+                "retrieval.allowed_principals_count",
+                len(allowed_principals) if allowed_principals else 0,
             )
-            for row in result.all()
-        ]
+            result = await self._session.execute(stmt)
+            rows = result.all()
+            span.set_attribute("retrieval.result_count", len(rows))
+            return [
+                VectorSearchResult(
+                    chunk_id=row.chunk_id,
+                    source_id=row.source_id,
+                    document_id=row.document_id,
+                    version_id=row.version_id,
+                    content=row.content,
+                    score=row.distance,
+                    allowed_principals=list(row.allowed_principals)
+                    if row.allowed_principals
+                    else [],
+                )
+                for row in rows
+            ]
 
     async def _get_active_index_version(
         self, index_version_id: UUID | None = None

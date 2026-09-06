@@ -9,22 +9,20 @@ infrastructure layer provides concrete ``VectorContentRetriever`` and
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any
 from uuid import UUID, uuid4
-
-from sqlalchemy import select
 
 from groundgraph.application.ports import (
     AnswerGenerator,
     EmbeddingProvider,
     EvidenceReranker,
+    IndexVersionResolver,
     KeywordRetrieverPort,
     VectorContentRetriever,
 )
 from groundgraph.application.retrieval.fusion import reciprocal_rank_fusion
 from groundgraph.application.settings import Settings, get_settings
 from groundgraph.domain.retrieval import Evidence, QueryResponse, RetrievalPlan
-from groundgraph.infrastructure.postgres.models import IndexVersion as _IndexVersionModel
 
 
 class IndexVersionMismatchError(RuntimeError):
@@ -42,6 +40,7 @@ class RetrievalServiceConfig:
     keyword_retriever: KeywordRetrieverPort
     reranker: EvidenceReranker
     answer_generator: AnswerGenerator
+    index_version_resolver: IndexVersionResolver
     settings: Settings | None = None
 
 
@@ -62,28 +61,14 @@ class RetrievalService:
         self._keyword_retriever = config.keyword_retriever
         self._reranker = config.reranker
         self._answer_generator = config.answer_generator
+        self._index_version_resolver = config.index_version_resolver
         self._settings = config.settings or get_settings()
 
-    async def _resolve_index_version(
-        self,
-        session: Any,
-        index_name: str,
-    ) -> _IndexVersionModel:
+    async def _resolve_index_version(self, index_name: str) -> Any:
         """Resolve and validate the active IndexVersion for ``index_name``."""
-        stmt = (
-            select(_IndexVersionModel)
-            .where(
-                _IndexVersionModel.index_name == index_name,
-                _IndexVersionModel.is_active == True,  # noqa: E712
-            )
-            .order_by(_IndexVersionModel.created_at.desc())
-            .limit(1)
-        )
-        result = await session.execute(stmt)
-        raw_idx = result.scalar_one_or_none()
-        if raw_idx is None:
+        idx = await self._index_version_resolver.resolve_active(index_name)
+        if idx is None:
             raise RuntimeError(f"No active IndexVersion found for index_name={index_name!r}")
-        idx = cast(_IndexVersionModel, raw_idx)
         if idx.embedding_model != self._embed.model:
             raise IndexVersionMismatchError(
                 f"Active index {idx.version_id} uses embedding_model="
@@ -115,26 +100,25 @@ class RetrievalService:
         vector_top_k = vector_top_k or self._settings.vector_top_k
         final_limit = final_limit or self._settings.final_evidence_limit
 
-        async with self._session_factory() as session:
-            active_index = await self._resolve_index_version(session, index_name)
-            index_version_id = active_index.version_id
+        active_index = await self._resolve_index_version(index_name)
+        index_version_id = active_index.version_id
 
-            query_vector = await self._embed.embed_one(question)
+        query_vector = await self._embed.embed_one(question)
 
-            vector_results = await self._vector_retriever.search(
-                query_vector,
-                vector_top_k,
-                allowed_principals=[principal],
-                tenant_id=tenant_id,
-                index_version_id=index_version_id,
-            )
+        vector_results = await self._vector_retriever.search(
+            query_vector,
+            vector_top_k,
+            allowed_principals=[principal],
+            tenant_id=tenant_id,
+            index_version_id=index_version_id,
+        )
 
-            keyword_results = await self._keyword_retriever.search(
-                question,
-                self._settings.keyword_top_k,
-                allowed_principals=[principal],
-                tenant_id=tenant_id,
-            )
+        keyword_results = await self._keyword_retriever.search(
+            question,
+            self._settings.keyword_top_k,
+            allowed_principals=[principal],
+            tenant_id=tenant_id,
+        )
 
         fused = reciprocal_rank_fusion(vector_results, keyword_results)
         top_results = fused[:final_limit]

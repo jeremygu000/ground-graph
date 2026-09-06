@@ -7,9 +7,12 @@ from dataclasses import dataclass
 from typing import Any
 
 from openai import AsyncOpenAI
+from opentelemetry.trace import get_tracer
 
 from groundgraph.application.ports import EmbeddingProvider
 from groundgraph.application.settings import Settings, get_settings
+
+_TRACER = get_tracer(__name__)
 
 
 @dataclass(frozen=True)
@@ -100,8 +103,11 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
         if self._supports_dimensions:
             kwargs["dimensions"] = self._dimensions
 
-        response = await self._client.embeddings.create(**kwargs)
-        return [item.embedding for item in response.data]
+        with _TRACER.start_as_current_span("embedding.call_api") as span:
+            span.set_attribute("embedding.batch_size", len(texts))
+            span.set_attribute("embedding.model", self._model)
+            response = await self._client.embeddings.create(**kwargs)
+            return [item.embedding for item in response.data]
 
     @property
     def _supports_dimensions(self) -> bool:
