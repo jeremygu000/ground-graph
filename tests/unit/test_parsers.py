@@ -116,5 +116,5 @@ class TestParserRegistry:
         assert isinstance(parser, HtmlParser)
 
     def test_returns_none_for_unsupported(self) -> None:
-        result = ParserRegistry.get("application/pdf")
+        result = ParserRegistry.get("application/x-unsupported-format")
         assert result is None

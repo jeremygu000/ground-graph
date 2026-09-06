@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
+
+if TYPE_CHECKING:
+    from opentelemetry.trace import Tracer
 
 from groundgraph.application.ports import IngestionUnitOfWork, ObjectStore
 from groundgraph.domain.documents import (
@@ -36,10 +41,12 @@ class IngestionService:
         uow_factory: Callable[[], IngestionUnitOfWork],
         object_store: ObjectStore,
         chunker: Chunker | None = None,
+        tracer: Tracer | None = None,
     ) -> None:
         self._uow_factory = uow_factory
         self._object_store = object_store
         self._chunker = chunker or Chunker()
+        self._tracer = tracer
 
     async def ingest_file(
         self,
@@ -47,8 +54,29 @@ class IngestionService:
         file_path: str,
         media_type: str,
     ) -> IngestionResult:
+        tracer = self._tracer
+        if tracer:
+            span = tracer.start_span("rag.ingestion")
+            span.set_attribute("source_id", str(source_id))
+            span.set_attribute("media_type", media_type)
+            span.set_attribute("file_path", file_path)
+        else:
+            span = None
+        try:
+            return await self._ingest_file_impl(source_id, file_path, media_type, span)
+        finally:
+            if span:
+                span.end()
+
+    async def _ingest_file_impl(  # noqa: PLR0915
+        self,
+        source_id: UUID,
+        file_path: str,
+        media_type: str,
+        span: Any,
+    ) -> IngestionResult:
         raw_bytes, checksum, canonical_locator, source = await self._acquire_and_validate(
-            source_id, file_path
+            source_id, file_path, span
         )
 
         raw_key = f"sources/{source_id}/{checksum}/raw"
@@ -64,12 +92,17 @@ class IngestionService:
                 assert checkpoint.version_id is not None
                 existing_doc = await uow.documents.get_document(checkpoint.document_id)
                 if existing_doc is not None and existing_doc.checksum == checksum:
-                    return IngestionResult(
+                    result = IngestionResult(
                         document_id=checkpoint.document_id,
                         version_id=existing_doc.version_id,
                         created_new_version=False,
                         tenant_id=source.tenant_id,
                     )
+                    if span:
+                        span.set_attribute("ingestion.resumed", True)
+                        span.set_attribute("document_id", str(result.document_id))
+                        span.set_attribute("version_id", str(result.version_id))
+                    return result
 
             existing = await uow.documents.find_active_document_by_canonical_locator(
                 source_id, canonical_locator
@@ -92,6 +125,10 @@ class IngestionService:
                         document_id=doc_id,
                         version_id=ver_id,
                     )
+                    if span:
+                        span.set_attribute("ingestion.idempotent_hit", True)
+                        span.set_attribute("document_id", str(doc_id))
+                        span.set_attribute("version_id", str(ver_id))
                     return result
                 document_id, version_id = doc_id, uuid4()
             else:
@@ -129,12 +166,15 @@ class IngestionService:
             )
 
             if is_new_version:
+                chunk_start = time.perf_counter()
                 chunks = self._chunker.chunk(
                     content=parsed,
                     document_id=canonical_doc_id,
                     version_id=canonical_version_id,
                     allowed_principals=source.allowed_principals,
                 )
+                chunk_duration_ms = (time.perf_counter() - chunk_start) * 1000
+
                 for chunk in chunks:
                     await uow.documents.create_chunk(chunk)
 
@@ -153,6 +193,17 @@ class IngestionService:
                 )
                 await uow.outbox.add(event)
 
+                if span:
+                    span.set_attribute("ingestion.chunk_count", len(chunks))
+                    span.set_attribute("ingestion.chunk_duration_ms", round(chunk_duration_ms, 2))
+                    span.set_attribute("ingestion.new_version", True)
+                    span.set_attribute("document_id", str(canonical_doc_id))
+                    span.set_attribute("version_id", str(canonical_version_id))
+            elif span:
+                span.set_attribute("ingestion.new_version", False)
+                span.set_attribute("document_id", str(canonical_doc_id))
+                span.set_attribute("version_id", str(canonical_version_id))
+
             return IngestionResult(
                 document_id=canonical_doc.document_id,
                 version_id=canonical_doc.version_id,
@@ -163,7 +214,7 @@ class IngestionService:
     MAX_FILE_SIZE = 100 * 1024 * 1024
 
     async def _acquire_and_validate(
-        self, source_id: UUID, file_path: str
+        self, source_id: UUID, file_path: str, span: Any | None = None
     ) -> tuple[bytes, str, str, SourceDescriptor]:
         async with self._uow_factory() as uow:
             source = await uow.documents.get_source(source_id)
@@ -175,6 +226,9 @@ class IngestionService:
         raw_bytes = await self._read_file(resolved_path)
         checksum = self._sha256(raw_bytes)
         canonical_locator = str(resolved_path)
+        if span:
+            span.set_attribute("content.size_bytes", len(raw_bytes))
+            span.set_attribute("content.checksum", checksum[:16])
         return raw_bytes, checksum, canonical_locator, source
 
     def _resolve_safe_path(self, source_root: str, file_path: str) -> Path:
