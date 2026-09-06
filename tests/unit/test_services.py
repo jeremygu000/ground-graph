@@ -7,9 +7,12 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExportResult
 
 from groundgraph.application.ingestion.chunker import Chunker
-from groundgraph.application.ingestion.services import IngestionService
+from groundgraph.application.ingestion.parsers import UnsupportedFormatError
+from groundgraph.application.ingestion.services import IngestionReport, IngestionService
 from groundgraph.domain.documents import (
     Chunk,
     IngestionCheckpoint,
@@ -158,6 +161,11 @@ class _FakeDocumentRepository:
     async def create_chunk(self, chunk: Chunk) -> None:
         self.chunks.append(chunk)
 
+    async def list_chunks(self, document_id: Any, version_id: Any) -> list[Chunk]:
+        return [
+            c for c in self.chunks if c.document_id == document_id and c.version_id == version_id
+        ]
+
     async def get_document(self, document_id: Any) -> ParsedDocument | None:
         for doc in self.documents:
             if doc.document_id == document_id:
@@ -303,12 +311,13 @@ class TestIngestionService:
         file_path = tmp_path / "doc.xyz"
         file_path.write_bytes(b"data")
 
-        with pytest.raises(ValueError, match="Unsupported media type"):
+        with pytest.raises(UnsupportedFormatError) as exc_info:
             await self.service.ingest_file(
                 source_id=source_id,
                 file_path=str(file_path),
                 media_type="application/xyz",
             )
+        assert exc_info.value.reason.value == "unsupported_media_type"
 
     async def test_ingest_file_unknown_source_raises(self, tmp_path: Any) -> None:
         file_path = tmp_path / "doc.txt"
@@ -441,3 +450,118 @@ class TestIngestionService:
                 file_path=str(link),
                 media_type="text/plain",
             )
+
+
+class TestIngestionTelemetry:
+    def setup_method(self) -> None:
+        self.fake_docs = _FakeDocumentRepository()
+        self.fake_store: Any = _FakeObjectStore()
+        self.fake_outbox = _FakeOutboxRepository()
+        self.fake_checkpoint = _FakeIngestionCheckpointRepository()
+
+        def uow_factory() -> Any:
+            return _FakeIngestionUoW(self.fake_docs, self.fake_outbox, self.fake_checkpoint)
+
+        self.service = IngestionService(
+            uow_factory=uow_factory,
+            object_store=self.fake_store,
+            chunker=Chunker(),
+        )
+
+    async def test_ingestion_span_contains_source_and_version_ids(self, tmp_path: Any) -> None:
+        class _CapturingExporter:
+            def __init__(self) -> None:
+                self.spans: list[Any] = []
+
+            def export(self, spans: Any) -> SpanExportResult:
+                self.spans.extend(spans)
+                return SpanExportResult.SUCCESS
+
+            def shutdown(self) -> None:
+                self.spans.clear()
+
+        exporter = _CapturingExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        tracer = provider.get_tracer("test")
+
+        source_id = uuid4()
+        self.fake_docs.set_source(
+            SourceDescriptor(
+                source_id=source_id,
+                source_type="filesystem",
+                uri=str(tmp_path),
+                classification="internal",
+                tenant_id="tenant-a",
+                allowed_principals=["engineering"],
+            )
+        )
+        file_path = tmp_path / "doc.txt"
+        file_path.write_bytes(b"# Title\n\nContent here.")
+
+        svc = IngestionService(
+            uow_factory=lambda: _FakeIngestionUoW(
+                self.fake_docs, self.fake_outbox, self.fake_checkpoint
+            ),
+            object_store=self.fake_store,
+            chunker=Chunker(),
+            tracer=tracer,
+        )
+
+        result = await svc.ingest_file(
+            source_id=source_id,
+            file_path=str(file_path),
+            media_type="text/markdown",
+        )
+
+        assert len(exporter.spans) == 1
+        span = exporter.spans[0]
+        attrs = dict(span.attributes)
+
+        assert attrs.get("source_id") == str(source_id)
+        assert attrs.get("document_id") == str(result.document_id)
+        assert attrs.get("version_id") == str(result.version_id)
+        assert attrs.get("media_type") == "text/markdown"
+
+        prohibited_keys = {"content", "body", "raw", "data"}
+        for key in prohibited_keys:
+            assert key not in attrs, f"prohibited key '{key}' found in span attributes"
+
+    async def test_generate_report_produces_quality_metrics(self, tmp_path: Any) -> None:
+        source_id = uuid4()
+        self.fake_docs.set_source(
+            SourceDescriptor(
+                source_id=source_id,
+                source_type="filesystem",
+                uri=str(tmp_path),
+                classification="internal",
+                tenant_id="tenant-a",
+                allowed_principals=["engineering"],
+            )
+        )
+        file_path = tmp_path / "doc.txt"
+        file_path.write_bytes(b"# Title\n\nContent.")
+
+        result = await self.service.ingest_file(
+            source_id=source_id,
+            file_path=str(file_path),
+            media_type="text/markdown",
+        )
+
+        report = await self.service.generate_report(
+            source_id=source_id,
+            result=result,
+            source_size_bytes=20,
+            duration_ms=15.0,
+            parse_error=None,
+        )
+
+        assert isinstance(report, IngestionReport)
+        assert report.source_id == source_id
+        assert report.document_id == result.document_id
+        assert report.version_id == result.version_id
+        assert report.parse_success is True
+        assert report.parse_error is None
+        assert report.chunk_count >= 1
+        assert report.empty_chunk_count == 0
+        assert report.duration_ms == 15.0

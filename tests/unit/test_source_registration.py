@@ -67,6 +67,22 @@ class TestSourceRegistrationService:
         with pytest.raises(ValueError, match="Not a directory"):
             await self.service.scan_directory("/nonexistent/path/xyz")
 
+    async def test_register_object_upload_source(self) -> None:
+        await self.service.register_object_upload_source(
+            uri="s3://bucket/prefix",
+            classification="internal",
+            tenant_id="tenant-b",
+            allowed_principals=["ops-team"],
+        )
+
+        assert len(self.fake_repo.created_sources) == 1
+        source = self.fake_repo.created_sources[0]
+        assert source.source_type == "object_store"
+        assert source.uri == "s3://bucket/prefix"
+        assert source.classification == "internal"
+        assert source.tenant_id == "tenant-b"
+        assert source.allowed_principals == ["ops-team"]
+
     def test_calculate_checksum(self, tmp_path: Path) -> None:
         file_path = tmp_path / "test.txt"
         file_path.write_bytes(b"hello world")

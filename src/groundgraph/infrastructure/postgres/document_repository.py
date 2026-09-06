@@ -86,13 +86,19 @@ class PostgresDocumentRepository(DocumentRepository):
         self, source_id: UUID, canonical_locator: str
     ) -> tuple[UUID, UUID] | None:
         result = await self._session.execute(
-            select(DocumentModel).where(
+            select(DocumentModel, SourceModel.is_active)
+            .join(SourceModel, DocumentModel.source_id == SourceModel.source_id)
+            .where(
                 DocumentModel.source_id == source_id,
                 DocumentModel.source_locator == canonical_locator,
+                SourceModel.is_active == True,  # noqa: E712
             )
         )
-        doc = result.scalar_one_or_none()
-        if doc is None or doc.current_version_id is None:
+        row = result.first()
+        if row is None:
+            return None
+        doc = row[0]
+        if doc.current_version_id is None:
             return None
         return (doc.document_id, doc.current_version_id)
 

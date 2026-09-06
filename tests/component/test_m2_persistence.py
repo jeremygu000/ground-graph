@@ -945,3 +945,111 @@ async def test_outbox_claim_pattern(postgres_component: Any) -> None:
         assert completed is not None
         assert completed.status == "completed"
         assert completed.completed_at is not None
+
+
+async def test_source_deactivation_removes_active_retrievability(postgres_component: Any) -> None:
+    async with (
+        _setup_postgres(postgres_component.dsn) as session_factory,
+        session_factory() as session,
+    ):
+        repo = PostgresDocumentRepository(cast(PostgresSession, session))
+        source_id = uuid4()
+        document_id = uuid4()
+        version_id = uuid4()
+
+        await repo.find_or_create_source(
+            SourceDescriptor(
+                source_id=source_id,
+                source_type="filesystem",
+                uri="/docs/active",
+                classification="internal",
+                tenant_id="tenant-a",
+                allowed_principals=["engineering"],
+            )
+        )
+        await repo.create_document(
+            ParsedDocument(
+                document_id=document_id,
+                version_id=version_id,
+                source_id=source_id,
+                title="Active Doc",
+                media_type="text/markdown",
+                checksum="abc123",
+                content="# Hello",
+                metadata={},
+                effective_at=datetime(2024, 1, 1, tzinfo=UTC),
+                source_locator="/docs/active/file.md",
+            )
+        )
+        await session.commit()
+
+        found = await repo.find_active_document_by_canonical_locator(
+            source_id, "/docs/active/file.md"
+        )
+        assert found is not None
+        assert found[0] == document_id
+
+        await repo.deactivate_source(source_id)
+        await session.commit()
+
+        not_found = await repo.find_active_document_by_canonical_locator(
+            source_id, "/docs/active/file.md"
+        )
+        assert not_found is None
+
+
+async def test_acl_propagates_to_all_chunks(postgres_component: Any) -> None:
+    async with (
+        _setup_postgres(postgres_component.dsn) as session_factory,
+        session_factory() as session,
+    ):
+        repo = PostgresDocumentRepository(cast(PostgresSession, session))
+        source_id = uuid4()
+        document_id = uuid4()
+        version_id = uuid4()
+        principals = ["engineering", "security-team"]
+
+        await repo.find_or_create_source(
+            SourceDescriptor(
+                source_id=source_id,
+                source_type="filesystem",
+                uri="/docs/acl",
+                classification="internal",
+                tenant_id="tenant-a",
+                allowed_principals=principals,
+            )
+        )
+        await repo.create_document(
+            ParsedDocument(
+                document_id=document_id,
+                version_id=version_id,
+                source_id=source_id,
+                title="ACL Doc",
+                media_type="text/markdown",
+                checksum="abc456",
+                content="# Section 1\n\nContent 1\n\n# Section 2\n\nContent 2",
+                metadata={},
+                effective_at=datetime(2024, 1, 1, tzinfo=UTC),
+                source_locator="/docs/acl/doc.md",
+            )
+        )
+        for i in range(3):
+            await repo.create_chunk(
+                Chunk(
+                    chunk_id=uuid4(),
+                    document_id=document_id,
+                    version_id=version_id,
+                    ordinal=i,
+                    heading_path=["Heading"],
+                    content=f"chunk-content-{i}",
+                    token_count=i + 1,
+                    checksum=f"chunk-checksum-{i}",
+                    allowed_principals=principals,
+                )
+            )
+        await session.commit()
+
+        chunks = await repo.list_chunks(document_id, version_id)
+        assert len(chunks) == 3
+        for chunk in chunks:
+            assert chunk.allowed_principals == principals

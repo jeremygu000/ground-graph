@@ -32,6 +32,23 @@ class SourceRegistrationService:
         )
         return await self._documents.find_or_create_source(source)
 
+    async def register_object_upload_source(
+        self,
+        uri: str,
+        classification: str,
+        tenant_id: str,
+        allowed_principals: list[str],
+    ) -> SourceDescriptor:
+        source = SourceDescriptor(
+            source_id=uuid4(),
+            source_type="object_store",
+            uri=uri,
+            classification=classification,
+            tenant_id=tenant_id,
+            allowed_principals=allowed_principals,
+        )
+        return await self._documents.find_or_create_source(source)
+
     async def scan_directory(
         self,
         root_uri: str,
