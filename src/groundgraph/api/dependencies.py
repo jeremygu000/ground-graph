@@ -12,10 +12,16 @@ import httpx
 from fastapi import Depends
 from neo4j import AsyncGraphDatabase
 
+from groundgraph.application.extraction.entity_resolver import EntityResolutionService
+from groundgraph.application.extraction.llm_extractor import LLMEntityExtractor
 from groundgraph.application.health import (
     DependencyHealth,
     HealthReasonCode,
     HealthService,
+)
+from groundgraph.application.retrieval.retrieval_planner import (
+    RetrievalPlanner,
+    RetrievalPlannerConfig,
 )
 from groundgraph.application.retrieval.retrieval_service import (
     RetrievalService,
@@ -26,6 +32,7 @@ from groundgraph.infrastructure.composition import (
     PgKeywordRetrieverAdapter,
     PgVectorContentRetriever,
 )
+from groundgraph.infrastructure.neo4j.repository import Neo4jGraphRepository
 from groundgraph.infrastructure.openai.answer_generator import EvidenceOnlyAnswerGenerator
 from groundgraph.infrastructure.openai.embedding_provider import OpenAIEmbeddingProvider
 from groundgraph.infrastructure.openai.reranker import CrossEncoderReranker
@@ -35,6 +42,7 @@ from groundgraph.infrastructure.postgres.index_version_resolver import (
 from groundgraph.infrastructure.postgres.keyword_retriever import PostgresKeywordRetriever
 from groundgraph.infrastructure.postgres.session import get_session_factory
 from groundgraph.infrastructure.postgres.vector_retriever import PostgresVectorRetriever
+from groundgraph.workflows.query_graph import QueryWorkflow, QueryWorkflowConfig
 
 MAX_REQUEST_ID_LENGTH = 128
 
@@ -208,3 +216,51 @@ def get_retrieval_service(
 ) -> RetrievalService:
     """Return a cached RetrievalService instance for the request."""
     return _build_retrieval_service(settings)
+
+
+def _build_query_workflow(settings: Settings) -> QueryWorkflow:
+    session_factory = get_session_factory()
+    embedding_provider = OpenAIEmbeddingProvider(settings=settings)
+    vector_retriever = PgVectorContentRetriever(PostgresVectorRetriever(session_factory))
+    keyword_retriever = PgKeywordRetrieverAdapter(PostgresKeywordRetriever(session_factory))
+    reranker = CrossEncoderReranker(settings=settings)
+    answer_generator = EvidenceOnlyAnswerGenerator(settings=settings)
+    index_version_resolver = PostgresIndexVersionResolver(session_factory)
+    neo4j_driver = AsyncGraphDatabase.driver(
+        settings.neo4j_uri,
+        auth=(settings.neo4j_user, settings.neo4j_password.get_secret_value()),
+        max_connection_pool_size=settings.neo4j_max_connection_pool_size,
+    )
+    neo4j_repo = Neo4jGraphRepository(driver=neo4j_driver, database=settings.neo4j_database)
+
+    entity_extractor = LLMEntityExtractor(settings=settings)
+    entity_resolver = EntityResolutionService(graph_repository=neo4j_repo)
+    planner = RetrievalPlanner(
+        RetrievalPlannerConfig(
+            entity_extractor=entity_extractor,
+            entity_resolver=entity_resolver,
+            embedding_provider=embedding_provider,
+        )
+    )
+
+    return QueryWorkflow(
+        config=QueryWorkflowConfig(
+            session_factory=session_factory,
+            planner=planner,
+            embedding_provider=embedding_provider,
+            vector_retriever=vector_retriever,
+            keyword_retriever=keyword_retriever,
+            graph_repository=neo4j_repo,
+            reranker=reranker,
+            answer_generator=answer_generator,
+            index_version_resolver=index_version_resolver,
+            settings=settings,
+        )
+    )
+
+
+def get_query_workflow(
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> QueryWorkflow:
+    """Return a cached QueryWorkflow instance for the request."""
+    return _build_query_workflow(settings)
