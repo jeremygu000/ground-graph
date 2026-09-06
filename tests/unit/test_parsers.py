@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+import pytest
+
 from groundgraph.application.ingestion.parsers import (
+    DocxParser,
+    EpubParser,
     HtmlParser,
     MarkdownParser,
     ParserRegistry,
+    PdfParser,
     TextParser,
+    UnsupportedFormatError,
+    UnsupportedReason,
 )
 
 
@@ -30,6 +37,16 @@ class TestTextParser:
         content = b""
         result = TextParser().parse(content)
         assert result.title == "untitled"
+
+    def test_empty_content_body_is_empty(self) -> None:
+        content = b""
+        result = TextParser().parse(content)
+        assert result.body == ""
+
+    def test_binary_content_decoded_with_replacement(self) -> None:
+        content = b"\x00\xff\xfe invalid"
+        result = TextParser().parse(content)
+        assert result.title != "untitled"
 
 
 class TestMarkdownParser:
@@ -71,6 +88,17 @@ Body content.
         assert result.title == "untitled"
         assert "Plain text" in result.body
 
+    def test_empty_content(self) -> None:
+        content = b""
+        result = MarkdownParser().parse(content)
+        assert result.title == "untitled"
+        assert result.body == ""
+
+    def test_only_frontmatter_no_trailing_newline(self) -> None:
+        content = b"---\nkey: value\n---"
+        result = MarkdownParser().parse(content)
+        assert result.title == "untitled"
+
 
 class TestHtmlParser:
     def test_extracts_title_from_title_tag(self) -> None:
@@ -98,6 +126,47 @@ class TestHtmlParser:
             (3, "Level3"),
         ]
 
+    def test_empty_html(self) -> None:
+        content = b"<html><body></body></html>"
+        result = HtmlParser().parse(content)
+        assert result.title == "untitled"
+        assert result.body == ""
+
+    def test_malformed_html_recovered(self) -> None:
+        content = b"<html><body><p>Unclosed tag<p>Another</body></html>"
+        result = HtmlParser().parse(content)
+        assert "Unclosed tag" in result.body
+
+
+class TestPdfParser:
+    def test_empty_pdf_raises_parse_error(self) -> None:
+        content = b""
+        with pytest.raises(UnsupportedFormatError) as exc_info:
+            PdfParser().parse(content)
+        assert exc_info.value.reason == UnsupportedReason.PARSE_ERROR
+
+
+class TestDocxParser:
+    def test_malformed_docx_raises(self) -> None:
+        content = b"not a valid docx"
+        with pytest.raises(UnsupportedFormatError) as exc_info:
+            DocxParser().parse(content)
+        assert exc_info.value.reason == UnsupportedReason.DOCX_PARSE_ERROR
+
+    def test_empty_docx_raises(self) -> None:
+        content = b""
+        with pytest.raises(UnsupportedFormatError) as exc_info:
+            DocxParser().parse(content)
+        assert exc_info.value.reason == UnsupportedReason.DOCX_PARSE_ERROR
+
+
+class TestEpubParser:
+    def test_empty_epub_raises(self) -> None:
+        content = b""
+        with pytest.raises(UnsupportedFormatError) as exc_info:
+            EpubParser().parse(content)
+        assert exc_info.value.reason == UnsupportedReason.EPUB_PARSE_ERROR
+
 
 class TestParserRegistry:
     def test_returns_text_parser_for_text_plain(self) -> None:
@@ -118,3 +187,12 @@ class TestParserRegistry:
     def test_returns_none_for_unsupported(self) -> None:
         result = ParserRegistry.get("application/x-unsupported-format")
         assert result is None
+
+    def test_get_with_reason_returns_parser_for_supported(self) -> None:
+        parser = ParserRegistry.get_with_reason("text/plain")
+        assert isinstance(parser, TextParser)
+
+    def test_get_with_reason_raises_for_unsupported(self) -> None:
+        with pytest.raises(UnsupportedFormatError) as exc_info:
+            ParserRegistry.get_with_reason("application/x-unsupported")
+        assert exc_info.value.reason == UnsupportedReason.UNSUPPORTED_MEDIA_TYPE
