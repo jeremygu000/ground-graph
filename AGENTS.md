@@ -215,7 +215,7 @@ M0 → M1 → M2 → M3 → M4 → M5 → M6 → M7 → M8 → M9 → M10 → M1
 - [x] M0 — Repository and engineering baseline
 - [x] M1 — Local infrastructure and telemetry foundation
 - [x] M2 — Domain contracts and persistence model
-- [ ] M3 — Document ingestion and versioning
+- [x] M3 — Document ingestion and versioning
 - [ ] M4 — Vector RAG baseline
 - [ ] M5 — Knowledge graph construction
 - [ ] M6 — Hybrid GraphRAG retrieval

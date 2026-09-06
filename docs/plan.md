@@ -50,7 +50,7 @@ Update `[ ]` to `[x]` only after the milestone acceptance criteria and validatio
     `tests/component/`. This is M1 testing-infrastructure follow-up,
     not a new milestone.
 - [x] M2 — Domain contracts and persistence model (domain types, ports, Postgres + Neo4j adapters, Alembic migrations)
-- [ ] M3 — Document ingestion and versioning
+- [x] M3 — Document ingestion and versioning
 - [ ] M4 — Vector RAG baseline
 - [ ] M5 — Knowledge graph construction
 - [ ] M6 — Hybrid GraphRAG retrieval
