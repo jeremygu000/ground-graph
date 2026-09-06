@@ -47,6 +47,10 @@ class IngestionService:
             source_id, file_path
         )
 
+        raw_key = f"sources/{source_id}/{checksum}/raw"
+        if not await self._object_store.exists(raw_key):
+            await self._object_store.put_raw(raw_key, raw_bytes, media_type)
+
         document_id: UUID
         version_id: UUID
         new_version = False
@@ -68,9 +72,6 @@ class IngestionService:
                 document_id, version_id = doc_id, uuid4()
             else:
                 document_id, version_id = uuid4(), uuid4()
-
-            raw_key = f"sources/{source_id}/{document_id}/{version_id}/raw"
-            await self._object_store.put_raw(raw_key, raw_bytes, media_type)
 
             parsed = self._parse(raw_bytes, media_type)
 

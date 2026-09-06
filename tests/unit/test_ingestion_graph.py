@@ -15,9 +15,14 @@ from groundgraph.workflows.ingestion_graph import IngestionState, IngestionWorkf
 class _FakeObjectStore:
     def __init__(self) -> None:
         self.put_raw_calls: list[tuple[str, bytes, str | None]] = []
+        self._objects: dict[str, bytes] = {}
 
     async def put_raw(self, key: str, data: bytes, content_type: str | None = None) -> None:
         self.put_raw_calls.append((key, data, content_type))
+        self._objects[key] = data
+
+    async def exists(self, key: str) -> bool:
+        return key in self._objects
 
 
 class _FakeOutboxRepository:

@@ -12,6 +12,7 @@ verifying:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import tempfile
 from collections.abc import AsyncGenerator
@@ -127,7 +128,8 @@ async def test_full_pipeline_ingest_to_s3_and_pg(
             assert result.version_id is not None
             assert result.created_new_version is True
 
-            raw_key = f"sources/{source_id}/{result.document_id}/{result.version_id}/raw"
+            content_bytes = b"# Hello\n\nWorld content."
+            raw_key = f"sources/{source_id}/{hashlib.sha256(content_bytes).hexdigest()}/raw"
             raw_exists = await s3_store.exists(raw_key)
             assert raw_exists, "raw bytes should exist in MinIO"
 
