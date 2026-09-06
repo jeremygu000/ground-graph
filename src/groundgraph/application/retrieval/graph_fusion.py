@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
 from groundgraph.application.ports import GraphRepository, RetrievedChunk
@@ -95,7 +95,7 @@ class GraphFusionService:
             facts = await self._repo.find_facts(
                 subject_id=current_id,
                 predicate=predicates[0] if predicates else None,
-                status="confirmed",
+                status="verified",
             )
             for fact in facts:
                 if fact.fact_id in seen:
@@ -108,7 +108,7 @@ class GraphFusionService:
             facts_as_obj = await self._repo.find_facts(
                 object_id=current_id,
                 predicate=predicates[0] if predicates else None,
-                status="confirmed",
+                status="verified",
             )
             for fact in facts_as_obj:
                 if fact.fact_id in seen:
@@ -136,6 +136,36 @@ class GraphFusionService:
         age_days: float = (now - observed_at).total_seconds() / 86400.0
         staleness: float = 0.5 ** (age_days / float(STALENESS_HALF_LIFE_DAYS))
         return staleness
+
+
+def _merge_temporal(
+    scores: dict[UUID, dict[str, Any]],
+    eid: UUID,
+    graph_ev: Evidence,
+    rank: int,
+) -> None:
+    graph_score_contrib = 1 / (RRF_K + rank) * GRAPH_WEIGHT
+    scores[eid]["rrf_score"] += graph_score_contrib
+    scores[eid]["graph_score"] = scores[eid].get("graph_score", 0) + graph_score_contrib
+    scores[eid]["graph_path_fact_ids"] = list(
+        set(scores[eid].get("graph_path_fact_ids", [])) | set(graph_ev.graph_path_fact_ids)
+    )
+    if graph_ev.valid_from is not None and (
+        scores[eid]["valid_from"] is None or graph_ev.valid_from < scores[eid]["valid_from"]
+    ):
+        scores[eid]["valid_from"] = graph_ev.valid_from
+    if graph_ev.valid_to is not None and (
+        scores[eid]["valid_to"] is None or graph_ev.valid_to > scores[eid]["valid_to"]
+    ):
+        scores[eid]["valid_to"] = graph_ev.valid_to
+
+
+def _determine_retrieval_method(s: dict[str, Any]) -> Literal["graph", "vector", "keyword"]:
+    if s["graph_score"]:
+        return "graph"
+    if s["vector_score"]:
+        return "vector"
+    return "keyword"
 
 
 def hybrid_rrf_fusion(
@@ -201,11 +231,12 @@ def hybrid_rrf_fusion(
                 "graph_score": 1 / (RRF_K + rank) * GRAPH_WEIGHT,
                 "rrf_score": 1 / (RRF_K + rank) * GRAPH_WEIGHT,
                 "allowed_principals": list(graph_ev.allowed_principals),
+                "graph_path_fact_ids": list(graph_ev.graph_path_fact_ids),
+                "valid_from": graph_ev.valid_from,
+                "valid_to": graph_ev.valid_to,
             }
         else:
-            graph_score_contrib = 1 / (RRF_K + rank) * GRAPH_WEIGHT
-            scores[eid]["rrf_score"] += graph_score_contrib
-            scores[eid]["graph_score"] = scores[eid].get("graph_score", 0) + graph_score_contrib
+            _merge_temporal(scores, eid, graph_ev, rank)
 
     sorted_evidences = sorted(scores.values(), key=lambda x: x["rrf_score"], reverse=True)
 
@@ -216,9 +247,6 @@ def hybrid_rrf_fusion(
         if src_id in seen_sources:
             continue
         seen_sources.add(src_id)
-        _retrieval_method = (
-            "graph" if s["graph_score"] else ("vector" if s["vector_score"] else "keyword")
-        )
         deduplicated.append(
             Evidence(
                 evidence_id=s["evidence_id"],
@@ -227,12 +255,12 @@ def hybrid_rrf_fusion(
                 version_id=s["version_id"],
                 chunk_id=s["chunk_id"],
                 content=s["content"],
-                retrieval_method=_retrieval_method,  # type: ignore[arg-type]
+                retrieval_method=_determine_retrieval_method(s),
                 vector_score=s["vector_score"],
                 rerank_score=None,
-                graph_path_fact_ids=[],
-                valid_from=None,
-                valid_to=None,
+                graph_path_fact_ids=s.get("graph_path_fact_ids", []),
+                valid_from=s.get("valid_from"),
+                valid_to=s.get("valid_to"),
                 allowed_principals=s["allowed_principals"],
             )
         )

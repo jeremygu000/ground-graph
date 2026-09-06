@@ -85,6 +85,110 @@ def test_hybrid_rrf_fusion_deduplicates_by_source() -> None:
     assert len(result) == 1
 
 
+def test_hybrid_rrf_fusion_preserves_graph_provenance_fields() -> None:
+    """Fusion preserves graph_path_fact_ids, valid_from, and valid_to from graph evidence."""
+    fact_ids = [uuid4(), uuid4()]
+    valid_from = datetime(2024, 1, 1, tzinfo=UTC)
+    valid_to = datetime(2025, 1, 1, tzinfo=UTC)
+    graph_ev = Evidence(
+        evidence_id=uuid4(),
+        source_id=uuid4(),
+        content="Graph fact",
+        retrieval_method="graph",
+        graph_path_fact_ids=fact_ids,
+        valid_from=valid_from,
+        valid_to=valid_to,
+        allowed_principals=["user1"],
+    )
+    result = hybrid_rrf_fusion(cast(Any, []), cast(Any, []), [graph_ev])
+    assert len(result) == 1
+    assert result[0].graph_path_fact_ids == fact_ids
+    assert result[0].valid_from == valid_from
+    assert result[0].valid_to == valid_to
+
+
+def test_hybrid_rrf_fusion_graph_merges_temporal_from_multiple_graph_evidence() -> None:
+    """Graph evidence with same ID: temporal fields merged (earliest from, latest to)."""
+    eid = uuid4()
+    src = uuid4()
+    ev1 = Evidence(
+        evidence_id=eid,
+        source_id=src,
+        content="Graph fact 1",
+        retrieval_method="graph",
+        graph_path_fact_ids=[uuid4()],
+        valid_from=datetime(2024, 1, 1, tzinfo=UTC),
+        valid_to=datetime(2024, 6, 1, tzinfo=UTC),
+        allowed_principals=["user1"],
+    )
+    ev2 = Evidence(
+        evidence_id=eid,
+        source_id=src,
+        content="Graph fact 2",
+        retrieval_method="graph",
+        graph_path_fact_ids=[uuid4()],
+        valid_from=datetime(2024, 3, 1, tzinfo=UTC),
+        valid_to=datetime(2025, 1, 1, tzinfo=UTC),
+        allowed_principals=["user1"],
+    )
+    result = hybrid_rrf_fusion(cast(Any, []), cast(Any, []), [ev1, ev2])
+    assert len(result) == 1
+    assert result[0].valid_from == datetime(2024, 1, 1, tzinfo=UTC)
+    assert result[0].valid_to == datetime(2025, 1, 1, tzinfo=UTC)
+    assert len(result[0].graph_path_fact_ids) == 2
+
+
+@pytest.mark.asyncio
+async def test_retrieve_evidence_graph_evidence_content_is_meaningful() -> None:
+    """Graph evidence content includes predicate and score, not just a score."""
+    entity_id = uuid4()
+    fact_id = uuid4()
+    fact = _FactWithMeta(
+        fact_id=fact_id,
+        predicate="depends_on",
+        subject_id=entity_id,
+        object_id=uuid4(),
+        observed_at=datetime.now(UTC),
+    )
+    repo = _RepoReturnsFacts([fact])
+    svc = GraphFusionService(graph_repository=cast(GraphRepository, repo))
+    entity = CanonicalEntity(
+        entity_id=entity_id,
+        entity_type="Service",
+        canonical_name="AuthService",
+        aliases=["AuthService"],
+    )
+    result = await svc.retrieve_evidence([entity])
+    assert len(result) == 1
+    content = result[0].content
+    assert "depends_on" in content
+
+
+@pytest.mark.asyncio
+async def test_retrieve_evidence_preserves_fact_ids() -> None:
+    """Graph evidence preserves graph_path_fact_ids for provenance tracking."""
+    entity_id = uuid4()
+    fact_id = uuid4()
+    fact = _FactWithMeta(
+        fact_id=fact_id,
+        predicate="implements",
+        subject_id=entity_id,
+        object_id=uuid4(),
+        observed_at=datetime.now(UTC),
+    )
+    repo = _RepoReturnsFacts([fact])
+    svc = GraphFusionService(graph_repository=cast(GraphRepository, repo))
+    entity = CanonicalEntity(
+        entity_id=entity_id,
+        entity_type="Service",
+        canonical_name="AuthService",
+        aliases=["AuthService"],
+    )
+    result = await svc.retrieve_evidence([entity])
+    assert len(result) == 1
+    assert result[0].graph_path_fact_ids == [fact_id]
+
+
 def test_hybrid_rrf_fusion_empty_inputs() -> None:
     """Fusion with no inputs returns empty list."""
     result = hybrid_rrf_fusion(cast(Any, []), cast(Any, []), cast(Any, []))

@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
+from groundgraph.application.ports import OutboxConsumer
+from groundgraph.domain.evidence import OutboxEvent, OutboxEventType
 from groundgraph.domain.knowledge import CanonicalEntity, EntityMention, KnowledgeFact
 from groundgraph.infrastructure.neo4j.repository import Neo4jGraphRepository
+from groundgraph.infrastructure.neo4j.unit_of_work import Neo4jUnitOfWork
 
 logger = logging.getLogger(__name__)
 
@@ -25,17 +29,17 @@ class OutboxGraphProjector:
     def __init__(self, graph_repository: Neo4jGraphRepository) -> None:
         self._graph = graph_repository
 
-    async def project_event(self, event: dict[str, Any]) -> None:
+    async def project_event(self, event: OutboxEvent) -> None:
         """Project a single outbox event to Neo4j."""
-        event_type = event.get("event_type")
-        payload = event.get("payload", {})
+        event_type = event.event_type
+        payload = event.payload
 
         try:
-            if event_type == "entity_mentioned":
+            if event_type == OutboxEventType.ENTITY_MENTIONED:
                 await self._project_mention(payload)
-            elif event_type == "entity_resolved":
+            elif event_type == OutboxEventType.ENTITY_RESOLVED:
                 await self._project_entity(payload)
-            elif event_type == "fact_candidate":
+            elif event_type == OutboxEventType.FACT_CANDIDATE:
                 await self._project_fact(payload)
             else:
                 logger.warning("Unknown event type: %s", event_type)
@@ -65,6 +69,12 @@ class OutboxGraphProjector:
         await self._graph.create_entity(entity)
 
     async def _project_fact(self, payload: dict[str, Any]) -> None:
+        valid_from = payload.get("valid_from")
+        valid_to = payload.get("valid_to")
+        if isinstance(valid_from, str):
+            valid_from = datetime.fromisoformat(valid_from)
+        if isinstance(valid_to, str):
+            valid_to = datetime.fromisoformat(valid_to)
         fact = KnowledgeFact(
             fact_id=payload["fact_id"],
             subject_id=payload["subject_id"],
@@ -73,8 +83,8 @@ class OutboxGraphProjector:
             status=payload.get("status", "candidate"),
             confidence=payload.get("confidence", 0.5),
             evidence_ids=payload.get("evidence_ids", []),
-            valid_from=payload.get("valid_from"),
-            valid_to=payload.get("valid_to"),
+            valid_from=valid_from,
+            valid_to=valid_to,
             observed_at=payload.get("observed_at") or datetime.now(UTC),
             extraction_method=payload.get("extraction_method", "llm"),
             ontology_version=payload.get("ontology_version", "v0.1.0"),
@@ -83,7 +93,7 @@ class OutboxGraphProjector:
 
 
 class OutboxGraphWorker:
-    """Background worker that polls the Postgres outbox and projects to Neo4j."""
+    """Background worker that polls the Postgres outbox via claim_batch and projects to Neo4j."""
 
     def __init__(
         self,
@@ -94,18 +104,40 @@ class OutboxGraphWorker:
         self._poll_interval = poll_interval
         self._running = False
 
-    async def start(self, outbox_reader: Any) -> None:
-        """Start the worker loop."""
+    async def start(
+        self,
+        consumer: OutboxConsumer,
+        uow_factory: Callable[[], Neo4jUnitOfWork],
+    ) -> None:
+        """Start the worker loop using claim_batch / mark_completed / mark_failed."""
         self._running = True
         while self._running:
             try:
-                events = await outbox_reader.read_pending(max_count=100)
-                for event in events:
-                    await self._projector.project_event(event)
+                events = await consumer.claim_batch(batch_size=100)
+                if events:
+                    for event in events:
+                        await self._process_event(consumer, event, uow_factory)
                 await asyncio.sleep(self._poll_interval)
             except Exception:
                 logger.exception("Worker error")
                 await asyncio.sleep(5)
+
+    async def _process_event(
+        self,
+        consumer: OutboxConsumer,
+        event: OutboxEvent,
+        uow_factory: Callable[[], Neo4jUnitOfWork],
+    ) -> None:
+        uow = uow_factory()
+        try:
+            async with uow:
+                assert uow.graph is not None, "Neo4jUnitOfWork.graph must not be None"
+                projector = OutboxGraphProjector(uow.graph)
+                await projector.project_event(event)
+            await consumer.mark_completed(event.event_id)
+        except Exception as exc:
+            logger.warning("Failed to project event %s: %s", event.event_id, exc)
+            await consumer.mark_failed(event.event_id, str(exc))
 
     def stop(self) -> None:
         """Stop the worker loop."""

@@ -32,13 +32,11 @@ dependencies = [
     "pyyaml>=6.0.2",
     "tenacity>=9.0.0",
     "orjson>=3.10.0",
-]
-
-[project.optional-dependencies]
-langgraph = [
     "langgraph>=0.2.0",
     "langchain-core>=0.3.0",
 ]
+
+[project.optional-dependencies]
 dev = [
     "pytest>=8.3.3",
     "pytest-asyncio>=0.24.0",

@@ -119,7 +119,7 @@ class QueryWorkflow:
 
     async def _execute_node(self, state: QueryWorkflowState) -> dict:
         try:
-            response = await self._svc.query(
+            result = await self._svc.query_with_evidence(
                 question=state.question,
                 principal=state.principal,
                 tenant_id=state.tenant_id,
@@ -128,12 +128,28 @@ class QueryWorkflow:
         except Exception as exc:
             return {"error": str(exc)}
         else:
-            return {"response": response, "error": None}
+            return {"response": result.response, "evidence": result.evidence, "error": None}
 
     async def _validate_node(self, state: QueryWorkflowState) -> dict:
         if state.response is None:
             return {}
         validated = await self._claim_validator.validate(state.response, state.evidence)
+        unsupported_factual = [
+            c for c in validated.claims if c.factual and c.support_status == "unsupported"
+        ]
+        if unsupported_factual:
+            warnings = list(validated.warnings) + [
+                f"Unsupported factual claim: {c.text[:50]}" for c in unsupported_factual[:3]
+            ]
+            validated = QueryResponse(
+                execution_run_id=validated.execution_run_id,
+                answer=None,
+                status="insufficient_evidence",
+                claims=[],
+                citations=[],
+                confidence_band="low",
+                warnings=warnings,
+            )
         return {"response": validated}
 
     def _decide_node(self, state: QueryWorkflowState) -> dict:

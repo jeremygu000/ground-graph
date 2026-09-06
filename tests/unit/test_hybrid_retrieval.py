@@ -53,3 +53,22 @@ async def test_query_requires_tenant_id() -> None:
     svc = HybridRetrievalService(config)  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="tenant_id"):
         await svc.query(question="test", principal="user1", tenant_id="")
+
+
+@pytest.mark.asyncio
+async def test_query_with_evidence_returns_result_and_evidence() -> None:
+    """query_with_evidence returns HybridRetrievalResult with response and evidence."""
+    config = HybridRetrievalConfig(
+        session_factory=object(),
+        embedding_provider=cast(EmbeddingProvider, object()),
+        vector_retriever=cast(VectorContentRetriever, object()),
+        keyword_retriever=cast(KeywordRetrieverPort, object()),
+        graph_repository=cast(GraphRepository, object()),
+        reranker=cast(EvidenceReranker, object()),
+        answer_generator=cast(AnswerGenerator, object()),
+        index_version_resolver=cast(IndexVersionResolver, object()),
+        planner=cast(Any, _FakeRetrievalPlanner()),
+    )
+    svc = HybridRetrievalService(config)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="tenant_id"):
+        await svc.query_with_evidence(question="test", principal="user1", tenant_id="")

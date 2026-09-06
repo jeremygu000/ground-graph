@@ -63,11 +63,15 @@ class FactExtractor:
         self,
         text: str,
         entities: list[str],
-        subject_id: UUID,
+        name_to_id: dict[str, UUID],
         evidence_ids: list[UUID],
         ontology_version: str | None = None,
     ) -> list[KnowledgeFact]:
-        """Extract facts from text given a list of entity surface forms."""
+        """Extract facts from text given entity surface forms and their IDs.
+
+        name_to_id maps canonical surface forms to resolved entity IDs.
+        Facts whose subject or object cannot be mapped are silently dropped.
+        """
         if not text.strip() or not entities:
             return []
 
@@ -111,11 +115,15 @@ class FactExtractor:
                 continue
             if f.predicate not in valid_predicates:
                 continue
+            sub_id = name_to_id.get(f.subject)
+            obj_id = name_to_id.get(f.object)
+            if sub_id is None or obj_id is None:
+                continue
             fact = KnowledgeFact(
                 fact_id=uuid4(),
-                subject_id=subject_id,
+                subject_id=sub_id,
                 predicate=f.predicate,
-                object_id=uuid4(),
+                object_id=obj_id,
                 status="candidate",
                 confidence=f.confidence,
                 evidence_ids=evidence_ids,

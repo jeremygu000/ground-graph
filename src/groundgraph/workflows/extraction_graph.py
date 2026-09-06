@@ -62,17 +62,15 @@ def build_extraction_graph(
         )
 
     async def extract_facts_node(state: ExtractionState) -> ExtractionState:
-        surface_forms = [e.canonical_name for e in state.resolved_entities]
-        subject_id = (
-            state.resolved_entities[0].entity_id
-            if state.resolved_entities
-            else UUID("00000000-0000-0000-0000-000000000000")
-        )
+        name_to_id: dict[str, UUID] = {
+            e.canonical_name: e.entity_id for e in state.resolved_entities
+        }
+        surface_forms = list(name_to_id.keys())
         evidence_ids = [state.chunk_id] if state.chunk_id else []
         facts = await fact_extractor.extract_facts(
             state.chunk_content,
             surface_forms,
-            subject_id,
+            name_to_id,
             evidence_ids,
         )
         return ExtractionState(**{**state.__dict__, "facts": facts})

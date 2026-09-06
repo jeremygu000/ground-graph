@@ -148,7 +148,14 @@ async def test_extraction_graph_emits_facts() -> None:
                     surface_form="AuthService",
                     candidate_type="Service",
                     extraction_confidence=0.9,
-                )
+                ),
+                EntityMention(
+                    mention_id=uuid4(),
+                    chunk_id=chunk_id,
+                    surface_form="Redis",
+                    candidate_type="Database",
+                    extraction_confidence=0.9,
+                ),
             ]
 
     class _FakeResolver:
@@ -161,13 +168,15 @@ async def test_extraction_graph_emits_facts() -> None:
             )
 
     class _FakeFactExtractor:
-        async def extract_facts(self, text, entities, subject_id, evidence_ids):
+        async def extract_facts(self, text, entities, name_to_id, evidence_ids):
+            redis_id = name_to_id.get("Redis", uuid4())
+            auth_id = name_to_id.get("AuthService", uuid4())
             return [
                 KnowledgeFact(
                     fact_id=uuid4(),
-                    subject_id=subject_id,
+                    subject_id=auth_id,
                     predicate="depends_on",
-                    object_id=uuid4(),
+                    object_id=redis_id,
                     status="candidate",
                     confidence=0.8,
                     evidence_ids=evidence_ids,

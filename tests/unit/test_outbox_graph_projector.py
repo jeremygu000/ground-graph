@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import cast
-from uuid import uuid4
+from typing import Any, cast
+from uuid import UUID, uuid4
 
 import pytest
 
+from groundgraph.domain.evidence import OutboxEvent, OutboxEventStatus, OutboxEventType
 from groundgraph.infrastructure.neo4j.repository import Neo4jGraphRepository
 from groundgraph.infrastructure.postgres.outbox_graph_projector import (
     OutboxGraphProjector,
@@ -31,6 +32,23 @@ class _FakeGraphRepository:
         self.facts.append(fact)
 
 
+def _make_event(
+    event_type: OutboxEventType,
+    payload: dict[str, Any],
+    event_id: UUID | None = None,
+) -> OutboxEvent:
+    return OutboxEvent(
+        event_id=event_id or uuid4(),
+        aggregate_type="test",
+        aggregate_id=uuid4(),
+        event_type=event_type,
+        payload=payload,
+        status=OutboxEventStatus.PENDING,
+        attempts=0,
+        created_at=datetime.now(UTC),
+    )
+
+
 @pytest.mark.asyncio
 async def test_project_mention_event() -> None:
     """ENTITY_MENTIONED events are projected to Neo4j."""
@@ -39,9 +57,9 @@ async def test_project_mention_event() -> None:
 
     mention_id = uuid4()
     chunk_id = uuid4()
-    event = {
-        "event_type": "entity_mentioned",
-        "payload": {
+    event = _make_event(
+        OutboxEventType.ENTITY_MENTIONED,
+        {
             "mention_id": str(mention_id),
             "chunk_id": str(chunk_id),
             "surface_form": "PostgreSQL",
@@ -49,7 +67,7 @@ async def test_project_mention_event() -> None:
             "locator": None,
             "extraction_confidence": 0.9,
         },
-    }
+    )
 
     await projector.project_event(event)
 
@@ -63,16 +81,16 @@ async def test_project_entity_event() -> None:
     projector = OutboxGraphProjector(cast(Neo4jGraphRepository, repo))
 
     entity_id = uuid4()
-    event = {
-        "event_type": "entity_resolved",
-        "payload": {
+    event = _make_event(
+        OutboxEventType.ENTITY_RESOLVED,
+        {
             "entity_id": str(entity_id),
             "entity_type": "Database",
             "canonical_name": "PostgreSQL",
             "aliases": ["PostgreSQL"],
             "attributes": {},
         },
-    }
+    )
 
     await projector.project_event(event)
 
@@ -90,9 +108,9 @@ async def test_project_fact_event() -> None:
     subject_id = uuid4()
     object_id = uuid4()
     now = datetime.now(UTC)
-    event = {
-        "event_type": "fact_candidate",
-        "payload": {
+    event = _make_event(
+        OutboxEventType.FACT_CANDIDATE,
+        {
             "fact_id": str(fact_id),
             "subject_id": str(subject_id),
             "predicate": "depends_on",
@@ -106,7 +124,7 @@ async def test_project_fact_event() -> None:
             "extraction_method": "llm",
             "ontology_version": "v0.1.0",
         },
-    }
+    )
 
     await projector.project_event(event)
 
@@ -120,7 +138,7 @@ async def test_project_unknown_event_type_logs_warning() -> None:
     repo = _FakeGraphRepository()
     projector = OutboxGraphProjector(cast(Neo4jGraphRepository, repo))
 
-    event = {"event_type": "UNKNOWN_EVENT", "payload": {}}
+    event = _make_event(OutboxEventType.DOCUMENT_PARSED, {})
 
     await projector.project_event(event)
 
@@ -139,9 +157,9 @@ async def test_project_event_handles_exception() -> None:
 
     projector = OutboxGraphProjector(cast(Neo4jGraphRepository, _ThrowingRepo()))
 
-    event = {
-        "event_type": "entity_mentioned",
-        "payload": {
+    event = _make_event(
+        OutboxEventType.ENTITY_MENTIONED,
+        {
             "mention_id": str(uuid4()),
             "chunk_id": str(uuid4()),
             "surface_form": "PostgreSQL",
@@ -149,7 +167,7 @@ async def test_project_event_handles_exception() -> None:
             "locator": None,
             "extraction_confidence": 0.9,
         },
-    }
+    )
 
     with pytest.raises(RuntimeError, match="DB error"):
         await projector.project_event(event)
