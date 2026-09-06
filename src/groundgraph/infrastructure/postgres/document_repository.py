@@ -92,12 +92,10 @@ class PostgresDocumentRepository(DocumentRepository):
                 source_locator=document.source_locator,
                 title=document.title,
                 media_type=document.media_type,
-                current_version_id=document.version_id,
             )
             .on_conflict_do_update(
                 index_elements=["source_id", "source_locator"],
                 set_={
-                    "current_version_id": document.version_id,
                     "title": document.title,
                     "media_type": document.media_type,
                 },
@@ -105,12 +103,11 @@ class PostgresDocumentRepository(DocumentRepository):
             .returning(DocumentModel.document_id)
         )
         doc_result = await self._session.execute(doc_stmt)
-        doc_result.scalar_one_or_none()
-        document_id: UUID = document.document_id
+        canonical_doc_id: UUID = doc_result.scalar_one()
 
         await self._session.execute(
             update(DocumentVersionModel)
-            .where(DocumentVersionModel.document_id == document_id)
+            .where(DocumentVersionModel.document_id == canonical_doc_id)
             .values(is_current=False)
         )
 
@@ -129,7 +126,7 @@ class PostgresDocumentRepository(DocumentRepository):
             version_stmt,
             {
                 "version_id": document.version_id,
-                "document_id": document_id,
+                "document_id": canonical_doc_id,
                 "checksum": document.checksum,
                 "content": document.content,
                 "doc_metadata": json.dumps(snapshot_json_object(document.metadata)),
@@ -137,10 +134,16 @@ class PostgresDocumentRepository(DocumentRepository):
             },
         )
         returned_version_id = ver_result.scalar_one_or_none()
+
+        await self._session.execute(
+            update(DocumentModel)
+            .where(DocumentModel.document_id == canonical_doc_id)
+            .values(current_version_id=returned_version_id or document.version_id)
+        )
         await self._session.flush()
 
         canonical = ParsedDocument(
-            document_id=document_id,
+            document_id=canonical_doc_id,
             version_id=returned_version_id or document.version_id,
             source_id=document.source_id,
             source_locator=document.source_locator,

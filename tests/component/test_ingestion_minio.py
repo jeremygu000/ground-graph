@@ -246,3 +246,83 @@ async def test_changed_content_new_version(
             async with make_uow() as uow:
                 versions = await uow.documents.list_document_versions(result1.document_id)
                 assert len(versions) == 2
+
+
+@pytest.mark.asyncio
+async def test_concurrent_ingest_same_content(
+    postgres_component: Any,
+    s3_store: S3ObjectStore,
+) -> None:
+    """Two concurrent tasks ingest the same file content.
+
+    Verifies that despite concurrent execution, only one document/version
+    is created (winner determined by database-level ON CONFLICT).
+    """
+    async with _pg_session(postgres_component.dsn) as sf:
+
+        def make_uow() -> IngestionUnitOfWork:
+            return PostgresUnitOfWork(sf)  # type: ignore[return-value]
+
+        service = IngestionService(uow_factory=make_uow, object_store=s3_store)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            source_id = uuid4()
+
+            async with make_uow() as uow:
+                source = SourceDescriptor(
+                    source_id=source_id,
+                    source_type="filesystem",
+                    uri=tmpdir,
+                    classification="internal",
+                    tenant_id="tenant-concurrent",
+                    allowed_principals=["engineering"],
+                )
+                await uow.documents.find_or_create_source(source)
+                await uow.commit()
+
+            test_file = os.path.join(tmpdir, "concurrent.txt")
+            await asyncio.to_thread(_write_file, test_file, "Concurrent content.")
+
+            start_gate = asyncio.Event()
+            result_ids: dict[str, Any] = {}
+
+            async def ingest_and_record(label: str) -> None:
+                await start_gate.wait()
+                result = await service.ingest_file(
+                    source_id=source_id,
+                    file_path=test_file,
+                    media_type="text/plain",
+                )
+                result_ids[label] = result
+
+            task1 = asyncio.create_task(ingest_and_record("first"))
+            task2 = asyncio.create_task(ingest_and_record("second"))
+
+            await asyncio.sleep(0.01)
+            start_gate.set()
+
+            await asyncio.gather(task1, task2)
+
+            assert len(result_ids) == 2
+            r1, r2 = result_ids["first"], result_ids["second"]
+
+            assert r1.document_id == r2.document_id, "both should get same document_id"
+            assert r1.version_id == r2.version_id, "both should get same version_id"
+            assert (r1.created_new_version is True and r2.created_new_version is False) or (
+                r1.created_new_version is False and r2.created_new_version is True
+            ), "one winner (True), one loser (False)"
+
+            async with make_uow() as uow:
+                versions = await uow.documents.list_document_versions(r1.document_id)
+                assert len(versions) == 1, "only one version should exist despite concurrent writes"
+
+                chunks = await uow.documents.list_chunks(r1.document_id, r1.version_id)
+                assert len(chunks) >= 1
+
+                pending = await uow.outbox.claim_batch(
+                    batch_size=10,
+                    worker_id="test-worker",
+                    lease_duration_seconds=60,
+                )
+                doc_events = [e for e in pending if e.aggregate_id == r1.document_id]
+                assert len(doc_events) == 1, "only one outbox event should exist"

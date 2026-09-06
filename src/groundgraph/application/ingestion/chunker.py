@@ -210,10 +210,7 @@ class Chunker:
             if p_start > chunk_start and p_start < target:
                 return p_end if p_start == prev_end else p_start
             if p_start <= chunk_start <= p_end and p_end > target:
-                if p_end - chunk_start < target - chunk_start:
-                    return p_end
-                sentence_pos = self._find_sentence_boundary(text, chunk_start)
-                return sentence_pos if chunk_start < sentence_pos < target else target
+                return p_end
             if p_start < target <= p_end:
                 return p_start
         return None

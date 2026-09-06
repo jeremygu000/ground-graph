@@ -178,18 +178,19 @@ async def test_document_repository_happy_paths() -> None:
             _Result(row=document_id),  # 2: upsert_document INSERT...RETURNING document_id (new doc)
             _Result(),  # 3: upsert_document UPDATE document_versions SET is_current=FALSE
             _Result(row=version_id),  # 4: upsert_document version INSERT...RETURNING version_id
-            _Result(row=source_row),  # 5: get_source
-            _Result(rows=[source_row, _source_model(uuid4(), "/docs/b")]),  # 6: list_sources
-            _Result(row=document_row),  # 7: get_document
-            _Result(row=version_row),  # 8: get_document_version
-            _Result(row=document_row),  # 9: get_document
-            _Result(row=version_row),  # 10: get_document_version
-            _Result(row=document_row),  # 11: get_document
-            _Result(rows=[version_row, older_version_row]),  # 12: list_document_versions
-            _Result(row=chunk_row),  # 13: get_chunk
-            _Result(rows=[chunk_row, later_chunk_row]),  # 14: list_chunks
-            _Result(),  # 15: delete_document (versions)
+            _Result(),  # 5: upsert_document UPDATE document SET current_version_id
+            _Result(row=source_row),  # 6: get_source
+            _Result(rows=[source_row, _source_model(uuid4(), "/docs/b")]),  # 7: list_sources
+            _Result(row=document_row),  # 8: get_document
+            _Result(row=version_row),  # 9: get_document_version
+            _Result(row=document_row),  # 10: get_document
+            _Result(row=version_row),  # 11: get_document_version
+            _Result(row=document_row),  # 12: get_document
+            _Result(rows=[version_row, older_version_row]),  # 13: list_document_versions
+            _Result(row=chunk_row),  # 14: get_chunk
+            _Result(rows=[chunk_row, later_chunk_row]),  # 15: list_chunks
             _Result(),  # 16: delete_document (versions)
+            _Result(),  # 17: delete_document (versions)
         ]
     )
     repo = PostgresDocumentRepository(cast(Any, session))
@@ -265,7 +266,7 @@ async def test_document_repository_happy_paths() -> None:
 
     assert session.flushed == 2
     assert len(session.added) == 1
-    assert len(session.executed) == 17
+    assert len(session.executed) == 18
 
 
 @pytest.mark.asyncio
