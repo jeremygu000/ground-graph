@@ -232,28 +232,47 @@ async def query_v1(
         output={},
         started_at=datetime.now(UTC),
     )
-    await repo.create_run(run)  # type: ignore[attr-defined]
+    await repo.create_run(run, commit=True)  # type: ignore[attr-defined]
 
     result: QueryResponse | None = None
     try:
+        await repo.update_run_status(  # type: ignore[attr-defined]
+            run_id=run.run_id,
+            expected_status=ExecutionRunStatus.PENDING,
+            new_status=ExecutionRunStatus.RUNNING,
+            commit=True,
+        )
+
         result = await workflow.ainvoke(
             question=request.question,
             principal=identity.principal,
             tenant_id=identity.tenant_id,
             index_name=request.index_name,
         )
+
+        run_output: dict[str, object] = {
+            "answer": result.answer,
+            "status": result.status,
+            "claims_count": len(result.claims),
+            "citation_ids": [c.evidence_id for c in result.citations],
+            "confidence_band": result.confidence_band,
+            "warnings": result.warnings,
+        }
         await repo.update_run_status(  # type: ignore[attr-defined]
             run_id=run.run_id,
-            expected_status=ExecutionRunStatus.PENDING,
+            expected_status=ExecutionRunStatus.RUNNING,
             new_status=ExecutionRunStatus.SUCCEEDED,
+            output=run_output,
+            commit=True,
         )
     except Exception as exc:
         await repo.update_run_status(  # type: ignore[attr-defined]
             run_id=run.run_id,
-            expected_status=ExecutionRunStatus.PENDING,
+            expected_status=ExecutionRunStatus.RUNNING,
             new_status=ExecutionRunStatus.FAILED,
             error_code="WORKFLOW_FAILED",
             error_message=str(exc),
+            commit=True,
         )
         _handle_error(exc, request_id)
 

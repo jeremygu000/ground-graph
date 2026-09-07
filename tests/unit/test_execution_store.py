@@ -34,6 +34,9 @@ class _RunRow:
     finished_at: datetime | None = None
     error_code: str | None = None
     error_message: str | None = None
+    index_version_id: UUID | None = None
+    prompt_version_id: str | None = None
+    model_version: str | None = None
 
 
 @dataclass
@@ -94,12 +97,19 @@ class _Session:
         self.get_map: dict[tuple[object, object], object | None] = {}
         self.execute_result: _Result = _Result()
         self.last_statement: object | None = None
+        self.commit_calls = 0
 
     def add(self, instance: object) -> None:
         self.added.append(instance)
 
     async def flush(self) -> None:
         self.flushed += 1
+
+    async def commit(self) -> None:
+        self.commit_calls += 1
+
+    async def rollback(self) -> None:
+        pass
 
     async def execute(self, statement: object, parameters: object | None = None) -> _Result:
         self.last_statement = statement
@@ -309,3 +319,84 @@ async def test_reconstruct_dag() -> None:
     run, _ = await repo.reconstruct_dag(run_id)
     assert run.run_id == run_id
     assert run.workflow == "query"
+
+
+@pytest.mark.asyncio
+async def test_create_run_with_commit_calls_session_commit() -> None:
+    session = _Session()
+    repo = ExecutionRepository(cast(PostgresSession, session))
+    run = ExecutionRun(
+        run_id=uuid4(),
+        workflow="query",
+        status=ExecutionRunStatus.PENDING,
+        principal="engineering",
+        tenant_id="default",
+    )
+    await repo.create_run(run, commit=True)
+    assert session.commit_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_update_run_status_with_output_and_commit() -> None:
+    session = _Session()
+    repo = ExecutionRepository(cast(PostgresSession, session))
+    run_id = uuid4()
+    session.execute_result = _Result(
+        row=_RunRow(
+            run_id=run_id,
+            workflow="query",
+            status=ExecutionRunStatus.RUNNING.value,
+            principal="engineering",
+            tenant_id="default",
+            input={},
+            output={},
+        )
+    )
+    await repo.update_run_status(
+        run_id,
+        ExecutionRunStatus.PENDING,
+        ExecutionRunStatus.RUNNING,
+        commit=True,
+    )
+    assert session.commit_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_update_step_status_sets_finished_at_on_terminal() -> None:
+    session = _Session()
+    repo = ExecutionRepository(cast(PostgresSession, session))
+    step_id = uuid4()
+    step_row = _StepRow(
+        step_id=step_id,
+        run_id=step_id,
+        name="plan",
+        status=ExecutionStepStatus.RUNNING.value,
+        attempt=1,
+        depends_on=[],
+        input={},
+        output={},
+    )
+    session.execute_result = _Result(row=step_row)
+    session.get_map = {(SQLExecutionStep, step_id): step_row}
+
+    await repo.update_step_status(step_id, ExecutionStepStatus.PENDING, ExecutionStepStatus.RUNNING)
+    session.execute_result = _Result(row=step_row)
+    session.get_map = {(SQLExecutionStep, step_id): step_row}
+
+    updated_row = _StepRow(
+        step_id=step_id,
+        run_id=step_id,
+        name="plan",
+        status=ExecutionStepStatus.SUCCEEDED.value,
+        attempt=1,
+        depends_on=[],
+        input={},
+        output={},
+    )
+    session.execute_result = _Result(row=updated_row)
+    session.get_map = {(SQLExecutionStep, step_id): updated_row}
+    await repo.update_step_status(
+        step_id, ExecutionStepStatus.RUNNING, ExecutionStepStatus.SUCCEEDED
+    )
+    assert session.last_statement is not None
+    assert "finished_at" in str(session.last_statement).lower()

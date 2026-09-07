@@ -499,3 +499,78 @@ def test_fail_node_produces_failed_response() -> None:
     failed_response: QueryResponse = result["response"]
     assert failed_response.status == "failed"
     assert failed_response.answer is None
+
+
+@pytest.mark.asyncio
+async def test_validate_node_returns_empty_dict_when_response_is_none() -> None:
+    """_validate_node returns {} when state.response is None (early return)."""
+    config = QueryWorkflowConfig(
+        session_factory=object(),
+        planner=cast(RetrievalPlanner, _FakePlanner()),
+        embedding_provider=object(),
+        vector_retriever=cast(VectorContentRetriever, object()),
+        keyword_retriever=cast(KeywordRetrieverPort, object()),
+        graph_repository=cast(GraphRepository, object()),
+        reranker=cast(EvidenceReranker, object()),
+        answer_generator=cast(AnswerGenerator, object()),
+        index_version_resolver=cast(IndexVersionResolver, object()),
+        settings=None,
+    )
+    workflow = QueryWorkflow(config)
+    state = QueryWorkflowState(
+        question="test",
+        principal="user1",
+        tenant_id="tenant1",
+        response=None,
+    )
+    result = await workflow._validate_node(state)
+    assert result == {}
+
+
+def test_decide_node_returns_empty_dict() -> None:
+    """_decide_node is a no-op pass-through (returns {})."""
+    config = QueryWorkflowConfig(
+        session_factory=object(),
+        planner=cast(RetrievalPlanner, _FakePlanner()),
+        embedding_provider=object(),
+        vector_retriever=cast(VectorContentRetriever, object()),
+        keyword_retriever=cast(KeywordRetrieverPort, object()),
+        graph_repository=cast(GraphRepository, object()),
+        reranker=cast(EvidenceReranker, object()),
+        answer_generator=cast(AnswerGenerator, object()),
+        index_version_resolver=cast(IndexVersionResolver, object()),
+        settings=None,
+    )
+    workflow = QueryWorkflow(config)
+    state = QueryWorkflowState(
+        question="test",
+        principal="user1",
+        tenant_id="tenant1",
+    )
+    result = workflow._decide_node(state)
+    assert result == {}
+
+
+def test_decide_route_returns_fail_when_response_is_none() -> None:
+    """_decide_route returns 'fail' when state.response is None."""
+    config = QueryWorkflowConfig(
+        session_factory=object(),
+        planner=cast(RetrievalPlanner, _FakePlanner()),
+        embedding_provider=object(),
+        vector_retriever=cast(VectorContentRetriever, object()),
+        keyword_retriever=cast(KeywordRetrieverPort, object()),
+        graph_repository=cast(GraphRepository, object()),
+        reranker=cast(EvidenceReranker, object()),
+        answer_generator=cast(AnswerGenerator, object()),
+        index_version_resolver=cast(IndexVersionResolver, object()),
+        settings=None,
+    )
+    workflow = QueryWorkflow(config)
+    state = QueryWorkflowState(
+        question="test",
+        principal="user1",
+        tenant_id="tenant1",
+        response=None,
+    )
+    result = workflow._decide_route(state)
+    assert result == "fail"

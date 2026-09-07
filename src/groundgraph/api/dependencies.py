@@ -251,6 +251,30 @@ def get_retrieval_service(
     return _build_retrieval_service(settings)
 
 
+_neo4j_driver: Any | None = None
+
+
+def _get_neo4j_driver() -> Any:
+    """Return a cached module-level Neo4j async driver."""
+    global _neo4j_driver  # noqa: PLW0603
+    if _neo4j_driver is None:
+        settings = get_settings()
+        _neo4j_driver = AsyncGraphDatabase.driver(  # pyright: ignore[reportUnknownMemberType]
+            settings.neo4j_uri,
+            auth=(settings.neo4j_user, settings.neo4j_password.get_secret_value()),
+            max_connection_pool_size=settings.neo4j_max_connection_pool_size,
+        )
+    return _neo4j_driver
+
+
+def close_neo4j_driver() -> None:
+    """Close the cached Neo4j driver. Call on app shutdown."""
+    global _neo4j_driver  # noqa: PLW0603
+    if _neo4j_driver is not None:
+        _neo4j_driver.close()
+        _neo4j_driver = None
+
+
 def _build_query_workflow(settings: Settings) -> QueryWorkflow:
     session_factory = get_session_factory()
     embedding_provider = OpenAIEmbeddingProvider(settings=settings)
@@ -259,15 +283,11 @@ def _build_query_workflow(settings: Settings) -> QueryWorkflow:
     reranker = CrossEncoderReranker(settings=settings)
     answer_generator = EvidenceOnlyAnswerGenerator(settings=settings)
     index_version_resolver = PostgresIndexVersionResolver(session_factory)
-    neo4j_driver = AsyncGraphDatabase.driver(
-        settings.neo4j_uri,
-        auth=(settings.neo4j_user, settings.neo4j_password.get_secret_value()),
-        max_connection_pool_size=settings.neo4j_max_connection_pool_size,
-    )
+    neo4j_driver = _get_neo4j_driver()
     neo4j_repo = Neo4jGraphRepository(driver=neo4j_driver, database=settings.neo4j_database)
 
     entity_extractor = LLMEntityExtractor(settings=settings)
-    entity_resolver = EntityResolutionService(graph_repository=neo4j_repo)
+    entity_resolver = EntityResolutionService(graph_repository=neo4j_repo, read_only=True)
     planner = RetrievalPlanner(
         RetrievalPlannerConfig(
             entity_extractor=entity_extractor,

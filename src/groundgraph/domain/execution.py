@@ -97,6 +97,9 @@ class ExecutionRun(BaseModel):
     finished_at: datetime | None = None
     error_code: str | None = None
     error_message: str | None = None
+    index_version_id: UUID | None = None
+    prompt_version_id: str | None = None
+    model_version: str | None = None
 
     @model_validator(mode="after")
     def _validate_terminal_consistency(self) -> ExecutionRun:

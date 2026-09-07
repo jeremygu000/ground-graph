@@ -37,6 +37,9 @@ class _RunRow:
     finished_at: object = None
     error_code: str | None = None
     error_message: str | None = None
+    index_version_id: UUID | None = None
+    prompt_version_id: str | None = None
+    model_version: str | None = None
 
 
 @dataclass

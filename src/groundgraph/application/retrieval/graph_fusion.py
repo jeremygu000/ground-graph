@@ -98,10 +98,12 @@ class GraphFusionService:
                     f"{subject_name} {fact.predicate} {obj_name} (confidence: {final_score:.2f})"
                 )
                 source_id = fact.evidence_ids[0] if fact.evidence_ids else fact.fact_id
+                chunk_id = fact.evidence_ids[0] if fact.evidence_ids else None
                 results.append(
                     Evidence(
                         evidence_id=fact.fact_id,
                         source_id=source_id,
+                        chunk_id=chunk_id,
                         content=content,
                         retrieval_method="graph",
                         vector_score=None,

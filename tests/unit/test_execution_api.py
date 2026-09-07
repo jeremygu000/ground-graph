@@ -16,7 +16,13 @@ from groundgraph.api.execution import (
     get_execution,
     replay_execution,
 )
-from groundgraph.domain.execution import ExecutionRun, ExecutionRunStatus
+from groundgraph.api.query import _handle_error
+from groundgraph.application.errors import InvalidTransitionError
+from groundgraph.domain.execution import (
+    ALLOWED_RUN_TRANSITIONS,
+    ExecutionRun,
+    ExecutionRunStatus,
+)
 from groundgraph.domain.retrieval import QueryResponse
 
 
@@ -24,22 +30,50 @@ class _FakeExecutionRepo:
     def __init__(self) -> None:
         self.runs: dict[UUID, ExecutionRun] = {}
 
-    async def create_run(self, run: ExecutionRun) -> ExecutionRun:
+    async def create_run(self, run: ExecutionRun, commit: bool = False) -> ExecutionRun:
         self.runs[run.run_id] = run
         return run
 
     async def get_run(self, run_id: UUID) -> ExecutionRun | None:
         return self.runs.get(run_id)
 
-    async def update_run_status(
+    async def update_run_status(  # noqa: PLR0917
         self,
         run_id: UUID,
         expected_status: ExecutionRunStatus,
         new_status: ExecutionRunStatus,
         error_code: str | None = None,
         error_message: str | None = None,
+        output: dict[str, object] | None = None,
+        commit: bool = False,
     ) -> ExecutionRun:
-        return self.runs[run_id]
+        if new_status not in ALLOWED_RUN_TRANSITIONS[expected_status]:
+            raise InvalidTransitionError(
+                f"illegal execution_run transition: {expected_status.value} -> {new_status.value}"
+            )
+        run = self.runs[run_id]
+        updated = ExecutionRun(
+            run_id=run.run_id,
+            workflow=run.workflow,
+            status=new_status,
+            principal=run.principal,
+            tenant_id=run.tenant_id,
+            input=run.input,
+            output=output if output is not None else run.output,
+            started_at=run.started_at,
+            finished_at=datetime.now(UTC)
+            if new_status
+            in (
+                ExecutionRunStatus.SUCCEEDED,
+                ExecutionRunStatus.FAILED,
+                ExecutionRunStatus.CANCELLED,
+            )
+            else None,
+            error_code=error_code or run.error_code,
+            error_message=error_message or run.error_message,
+        )
+        self.runs[run_id] = updated
+        return updated
 
 
 class _FakeWorkflow:
@@ -141,7 +175,7 @@ async def test_replay_execution_non_succeeded_raises_409() -> None:
     original = ExecutionRun(
         run_id=run_id,
         workflow="query",
-        status=ExecutionRunStatus.FAILED,
+        status=ExecutionRunStatus.CANCELLED,
         principal="user1",
         tenant_id="tenant-a",
         input={"question": "What is Postgres?"},
@@ -369,6 +403,97 @@ class TestReplayResponse:
         assert resp.execution_run_id == new_id
 
 
+@pytest.mark.asyncio
+async def test_replay_execution_workflow_error_raises() -> None:
+    run_id = uuid4()
+    now = datetime.now(UTC)
+    original = ExecutionRun(
+        run_id=run_id,
+        workflow="query",
+        status=ExecutionRunStatus.SUCCEEDED,
+        principal="user1",
+        tenant_id="tenant-a",
+        input={"question": "What is Postgres?"},
+        output={"answer": "A database."},
+        started_at=now,
+        finished_at=now,
+    )
+    repo = _FakeExecutionRepo()
+    repo.runs[run_id] = original
+    workflow = _FakeWorkflow(raises=RuntimeError("workflow failed"))
+    identity = Identity(tenant_id="tenant-a", principal="user1")
+
+    with pytest.raises(RuntimeError, match="workflow failed"):
+        await replay_execution(
+            run_id=run_id, repo=repo, workflow=cast(Any, workflow), identity=identity
+        )
+
+
+@pytest.mark.asyncio
+async def test_replay_execution_allows_failed_run() -> None:
+    """Failed runs can be replayed (transient infrastructure failures)."""
+    run_id = uuid4()
+    now = datetime.now(UTC)
+    original = ExecutionRun(
+        run_id=run_id,
+        workflow="query",
+        status=ExecutionRunStatus.FAILED,
+        principal="user1",
+        tenant_id="tenant-a",
+        input={"question": "What is Postgres?"},
+        output={"error": "Network timeout"},
+        started_at=now,
+        finished_at=now,
+    )
+    repo = _FakeExecutionRepo()
+    repo.runs[run_id] = original
+    workflow = _FakeWorkflow()
+    identity = Identity(tenant_id="tenant-a", principal="user1")
+
+    resp = await replay_execution(
+        run_id=run_id, repo=repo, workflow=cast(Any, workflow), identity=identity
+    )
+    assert resp.original_run_id == run_id
+    assert resp.status == "succeeded"
+
+
+def test_execution_run_response_from_domain_with_output() -> None:
+    run_id = uuid4()
+    started = datetime.now(UTC)
+    finished = datetime.now(UTC)
+    run = ExecutionRun(
+        run_id=run_id,
+        workflow="query",
+        status=ExecutionRunStatus.SUCCEEDED,
+        principal="user1",
+        tenant_id="tenant-a",
+        input={"question": "What is Postgres?"},
+        output={
+            "answer": "A database",
+            "claims_count": 3,
+            "citation_ids": [str(uuid4())],
+            "confidence_band": "high",
+            "warnings": [],
+        },
+        started_at=started,
+        finished_at=finished,
+    )
+
+    resp = ExecutionRunResponse.from_domain(run)
+    assert resp.output == run.output
+    assert resp.status == "succeeded"
+
+
+class TestHandleError:
+    def test_handle_error_raises_http_500(self) -> None:
+        exc = ValueError("something went wrong")
+        with pytest.raises(HTTPException) as exc_info:
+            _handle_error(exc, "req-123")
+        assert exc_info.value.status_code == 500
+        assert exc_info.value.headers is not None
+        assert exc_info.value.headers["X-Request-ID"] == "req-123"
+
+
 class TestExecutionRunStateMachine:
     def test_pending_to_succeeded_transition(self) -> None:
         run = ExecutionRun(
@@ -423,3 +548,86 @@ class TestExecutionRunStateMachine:
             finished_at=datetime.now(UTC),
         )
         assert run.status == ExecutionRunStatus.CANCELLED
+
+
+class TestFakeExecutionRepoCommit:
+    @pytest.mark.asyncio
+    async def test_create_run_with_commit(self) -> None:
+        repo = _FakeExecutionRepo()
+        run = ExecutionRun(
+            run_id=uuid4(),
+            workflow="query",
+            status=ExecutionRunStatus.PENDING,
+            principal="user1",
+            tenant_id="tenant-a",
+        )
+        result = await repo.create_run(run, commit=True)
+        assert result.run_id == run.run_id
+        assert run in repo.runs.values()
+
+    @pytest.mark.asyncio
+    async def test_update_run_status_with_output(self) -> None:
+        repo = _FakeExecutionRepo()
+        run_id = uuid4()
+        pending_run = ExecutionRun(
+            run_id=run_id,
+            workflow="query",
+            status=ExecutionRunStatus.PENDING,
+            principal="user1",
+            tenant_id="tenant-a",
+        )
+        await repo.create_run(pending_run)
+        await repo.update_run_status(
+            run_id,
+            ExecutionRunStatus.PENDING,
+            ExecutionRunStatus.RUNNING,
+        )
+        updated = await repo.update_run_status(
+            run_id,
+            ExecutionRunStatus.RUNNING,
+            ExecutionRunStatus.SUCCEEDED,
+            output={"answer": "test", "claims_count": 2},
+        )
+        assert updated.output == {"answer": "test", "claims_count": 2}
+
+    @pytest.mark.asyncio
+    async def test_update_run_status_invalid_transition_raises(self) -> None:
+        repo = _FakeExecutionRepo()
+        run_id = uuid4()
+        pending_run = ExecutionRun(
+            run_id=run_id,
+            workflow="query",
+            status=ExecutionRunStatus.PENDING,
+            principal="user1",
+            tenant_id="tenant-a",
+        )
+        await repo.create_run(pending_run)
+        with pytest.raises(InvalidTransitionError):
+            await repo.update_run_status(
+                run_id,
+                ExecutionRunStatus.PENDING,
+                ExecutionRunStatus.SUCCEEDED,
+            )
+
+    @pytest.mark.asyncio
+    async def test_get_execution_cross_principal_raises_404(self) -> None:
+        run_id = uuid4()
+        now = datetime.now(UTC)
+        run = ExecutionRun(
+            run_id=run_id,
+            workflow="query",
+            status=ExecutionRunStatus.SUCCEEDED,
+            principal="user2",
+            tenant_id="tenant-a",
+            input={},
+            output={},
+            started_at=now,
+            finished_at=now,
+        )
+        repo = _FakeExecutionRepo()
+        repo.runs[run_id] = run
+        identity = Identity(tenant_id="tenant-a", principal="user1")
+
+        with pytest.raises(HTTPException) as exc_info:
+            await get_execution(run_id=run_id, repo=repo, identity=identity)
+        assert exc_info.value.status_code == 404

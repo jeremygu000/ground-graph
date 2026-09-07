@@ -70,8 +70,8 @@ async def get_execution(
 ) -> ExecutionRunResponse:
     """Retrieve a previously executed run by ID.
 
-    The run must belong to the requesting tenant. Tenants cannot inspect
-    each other's execution runs.
+    The run must belong to the requesting tenant and principal. Users cannot
+    inspect each other's execution runs within the same tenant.
     """
     result = await repo.get_run(run_id)  # type: ignore[attr-defined]
     if result is None:
@@ -79,7 +79,7 @@ async def get_execution(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Execution run {run_id} not found",
         )
-    if result.tenant_id != identity.tenant_id:
+    if result.tenant_id != identity.tenant_id or result.principal != identity.principal:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Execution run {run_id} not found",
@@ -112,17 +112,17 @@ async def replay_execution(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Execution run {run_id} not found",
         )
-    if original.tenant_id != identity.tenant_id:
+    if original.tenant_id != identity.tenant_id or original.principal != identity.principal:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Execution run {run_id} not found",
         )
-    if original.status != ExecutionRunStatus.SUCCEEDED:
+    if original.status not in (ExecutionRunStatus.SUCCEEDED, ExecutionRunStatus.FAILED):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
                 f"Cannot replay run in status {original.status.value}. "
-                "Only succeeded runs can be replayed."
+                "Only succeeded or failed runs can be replayed."
             ),
         )
 
@@ -143,9 +143,16 @@ async def replay_execution(
         output={},
         started_at=datetime.now(UTC),
     )
-    await repo.create_run(new_run)  # type: ignore[attr-defined]
+    await repo.create_run(new_run, commit=True)  # type: ignore[attr-defined]
 
     try:
+        await repo.update_run_status(  # type: ignore[attr-defined]
+            run_id=new_run.run_id,
+            expected_status=ExecutionRunStatus.PENDING,
+            new_status=ExecutionRunStatus.RUNNING,
+            commit=True,
+        )
+
         await workflow.ainvoke(
             question=question,
             principal=identity.principal,
@@ -154,22 +161,25 @@ async def replay_execution(
         )
         await repo.update_run_status(  # type: ignore[attr-defined]
             run_id=new_run.run_id,
-            expected_status=ExecutionRunStatus.PENDING,
+            expected_status=ExecutionRunStatus.RUNNING,
             new_status=ExecutionRunStatus.SUCCEEDED,
+            commit=True,
         )
+        final_status = "succeeded"
     except Exception as exc:
         await repo.update_run_status(  # type: ignore[attr-defined]
             run_id=new_run.run_id,
-            expected_status=ExecutionRunStatus.PENDING,
+            expected_status=ExecutionRunStatus.RUNNING,
             new_status=ExecutionRunStatus.FAILED,
             error_code="REPLAY_FAILED",
             error_message=str(exc),
+            commit=True,
         )
         raise
 
     return ReplayResponse(
         new_run_id=new_run.run_id,
         original_run_id=run_id,
-        status="succeeded",
+        status=final_status,
         execution_run_id=new_run.run_id,
     )

@@ -36,7 +36,7 @@ class ExecutionRepository:
     def __init__(self, session: PostgresSession) -> None:
         self._session = session
 
-    async def create_run(self, run: ExecutionRun) -> ExecutionRun:
+    async def create_run(self, run: ExecutionRun, commit: bool = False) -> ExecutionRun:
         # The caller owns the transaction boundary (UoW); this repository
         # only flushes changes so the session can be committed or rolled back
         # as one unit with related document/outbox writes.
@@ -52,9 +52,14 @@ class ExecutionRepository:
             finished_at=run.finished_at,
             error_code=run.error_code,
             error_message=run.error_message,
+            index_version_id=run.index_version_id,
+            prompt_version_id=run.prompt_version_id,
+            model_version=run.model_version,
         )
         self._session.add(sql_run)
         await self._session.flush()
+        if commit:
+            await self._session.commit()
         return run
 
     async def get_run(self, run_id: UUID) -> ExecutionRun | None:
@@ -66,13 +71,15 @@ class ExecutionRepository:
             return None
         return self._sql_run_to_domain(sql_run)
 
-    async def update_run_status(
+    async def update_run_status(  # noqa: PLR0917
         self,
         run_id: UUID,
         expected_status: ExecutionRunStatus,
         new_status: ExecutionRunStatus,
         error_code: str | None = None,
         error_message: str | None = None,
+        output: dict[str, object] | None = None,
+        commit: bool = False,
     ) -> ExecutionRun:
         if new_status not in ALLOWED_RUN_TRANSITIONS[expected_status]:
             raise InvalidTransitionError(
@@ -90,6 +97,8 @@ class ExecutionRepository:
             update_values["error_code"] = error_code
         if error_message is not None:
             update_values["error_message"] = error_message
+        if output is not None:
+            update_values["output"] = snapshot_json_object(output)
 
         result = await self._session.execute(
             update(SQLExecutionRun)
@@ -109,6 +118,8 @@ class ExecutionRepository:
                 )
             raise ConcurrencyConflictError(f"ExecutionRun {run_id} update lost race")
         await self._session.flush()
+        if commit:
+            await self._session.commit()
         return self._sql_run_to_domain(sql_run)
 
     async def create_step(self, step: ExecutionStep) -> ExecutionStep:
@@ -213,6 +224,9 @@ class ExecutionRepository:
             finished_at=sql.finished_at,
             error_code=sql.error_code,
             error_message=sql.error_message,
+            index_version_id=sql.index_version_id,
+            prompt_version_id=sql.prompt_version_id,
+            model_version=sql.model_version,
         )
 
     def _sql_step_to_domain(self, sql: SQLExecutionStep) -> ExecutionStep:

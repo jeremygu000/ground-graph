@@ -32,10 +32,12 @@ class EntityResolutionService:
         graph_repository: Neo4jGraphRepository | None = None,
         fuzzy_threshold: float = 0.85,
         review_threshold: float = 0.7,
+        read_only: bool = False,
     ) -> None:
         self._graph_repository = graph_repository
         self._fuzzy_threshold = fuzzy_threshold
         self._review_threshold = review_threshold
+        self._read_only = read_only
 
     async def resolve(self, mention: EntityMention) -> CanonicalEntity | None:
         """Resolve a single mention to a canonical entity.
@@ -111,6 +113,6 @@ class EntityResolutionService:
             canonical_name=name,
             aliases=[name],
         )
-        if self._graph_repository is not None:
+        if self._graph_repository is not None and not self._read_only:
             await self._graph_repository.create_entity(entity)
         return entity

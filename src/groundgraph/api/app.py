@@ -17,7 +17,11 @@ from opentelemetry.sdk.metrics.export import MetricReader
 from opentelemetry.sdk.trace.export import SpanExporter
 from opentelemetry.trace import Span
 
-from groundgraph.api.dependencies import build_health_service, request_id_from_headers
+from groundgraph.api.dependencies import (
+    build_health_service,
+    close_neo4j_driver,
+    request_id_from_headers,
+)
 from groundgraph.api.execution import router as execution_router
 from groundgraph.api.health import router as health_router
 from groundgraph.api.query import router as query_router
@@ -171,6 +175,7 @@ def create_app(  # noqa: PLR0915 - composition root keeps app lifecycle wiring t
         yield
         if instrumented:
             FastAPIInstrumentor.uninstrument_app(app)
+        close_neo4j_driver()
         shutdown_tracing(tracer_provider)
         shutdown_meter_provider(meter_provider)
 
