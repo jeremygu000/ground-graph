@@ -121,7 +121,10 @@ filterwarnings = [
 [tool.coverage.run]
 source = ["src/groundgraph"]
 branch = true
-omit = []
+omit = [
+    # CLI entry point - tested via make eval-smoke, not unit tests
+    "src/groundgraph/application/evaluation/smoke.py",
+]
 
 [tool.coverage.report]
 precision = 2
