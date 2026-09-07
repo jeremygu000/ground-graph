@@ -88,7 +88,7 @@ jobs:
         run: uv sync --locked --all-extras
 
       - name: Run M6 Hybrid Evaluation
-        run: uv run python -m evals.runners.m6_hybrid_evaluation || echo "M6 eval requires Docker, skipped"
+        run: uv run python -m evals.runners.m6_hybrid_evaluation
 
       - name: Run evaluation smoke
         run: uv run python -m groundgraph.application.evaluation.smoke

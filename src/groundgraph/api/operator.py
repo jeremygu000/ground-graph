@@ -3,24 +3,31 @@
 Provides read-only views for operators to inspect system health,
 execution traces, evaluation results, and review queues.
 
-All endpoints require operator role (checked via X-Operator-ID header).
+All endpoints require a verified JWT with operator or admin role claim.
+Operator identity is extracted from the Authorization: Bearer token.
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
 from typing import Annotated
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
+from jose import jwt
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select, update
 
-from groundgraph.api.dependencies import get_execution_repo_with_session
-from groundgraph.application.settings import Settings, get_settings
+from groundgraph.api.dependencies import (
+    _get_identity_from_jwt,
+    get_execution_repo_with_session,
+    get_settings,
+)
+from groundgraph.application.settings import Settings
 from groundgraph.infrastructure.postgres.models import (
     EvaluationResult,
     EvaluationRun,
+    ExecutionRun,
     HumanReviewItem,
     Source,
     UserFeedback,
@@ -30,19 +37,96 @@ from groundgraph.infrastructure.postgres.session import get_session_factory
 router = APIRouter(prefix="/operator", tags=["operator"])
 
 
+ALLOWED_OPERATOR_ROLES = {"operator", "admin"}
+
+
 class OperatorIdentity(BaseModel):
     operator_id: str
+    tenant_id: str
+    is_global: bool
 
 
 def _get_operator_identity(
-    x_operator_id: Annotated[str | None, Header(alias="X-Operator-ID")] = None,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+    settings: Settings = Depends(get_settings),
 ) -> OperatorIdentity:
-    if not x_operator_id:
+    """Verify JWT and extract operator identity.
+
+    Requires a valid JWT with operator or admin role.
+    """
+    if not authorization:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="X-Operator-ID header required",
+            detail="Authorization header required",
         )
-    return OperatorIdentity(operator_id=x_operator_id)
+
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Bearer token required",
+        )
+    token = authorization[7:]
+
+    if settings.auth_mode == "local":
+        if not settings.auth_trusted_headers:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Header auth not allowed in this environment",
+            )
+        try:
+            unverified_claims = jwt.get_unverified_claims(token)
+            claims = dict(unverified_claims)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid JWT format",
+            ) from exc
+        role = claims.get("role", "")
+        if isinstance(role, list):
+            has_role = bool(set(role) & ALLOWED_OPERATOR_ROLES)
+        else:
+            has_role = role in ALLOWED_OPERATOR_ROLES
+        if not has_role:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Operator or admin role required",
+            )
+        tenant_id = str(claims.get("tenant_id", settings.auth_default_tenant))
+        principal = str(claims.get("sub", "unknown"))
+        is_global = claims.get("is_global_operator", False) is True
+        return OperatorIdentity(
+            operator_id=principal,
+            tenant_id=tenant_id,
+            is_global=is_global,
+        )
+
+    identity = _get_identity_from_jwt(token, settings)
+    claims = {}
+    try:
+        unverified = jwt.get_unverified_claims(token)
+        claims = dict(unverified)
+    except Exception:
+        pass
+
+    role = claims.get("role", "")
+    if isinstance(role, list):
+        has_role = bool(set(role) & ALLOWED_OPERATOR_ROLES)
+    else:
+        has_role = role in ALLOWED_OPERATOR_ROLES
+
+    if not has_role:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Operator or admin role required",
+        )
+
+    is_global = claims.get("is_global_operator", False) is True
+
+    return OperatorIdentity(
+        operator_id=identity.principal,
+        tenant_id=identity.tenant_id,
+        is_global=is_global,
+    )
 
 
 class ExecutionRunSummary(BaseModel):
@@ -88,7 +172,7 @@ class ReviewQueueItem(BaseModel):
 
 class FeedbackSubmission(BaseModel):
     execution_run_id: UUID
-    vote: str = Field()
+    vote: str = Field(pattern="^(thumbs_up|thumbs_down)$")
     category: str | None = None
     correction: str | None = None
     notes: str | None = None
@@ -98,6 +182,19 @@ class FeedbackResponse(BaseModel):
     feedback_id: UUID
     status: str
     created_at: datetime
+
+
+class ReviewDecisionSubmission(BaseModel):
+    review_id: UUID
+    decision: str = Field(pattern="^(approved|rejected)$")
+    notes: str | None = None
+
+
+class ReviewDecisionResponse(BaseModel):
+    review_id: UUID
+    decision: str
+    decided_by: str
+    decided_at: datetime
 
 
 @router.get("/executions/{run_id}", response_model=ExecutionRunSummary)
@@ -123,6 +220,12 @@ async def get_execution_summary(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Execution run {run_id} not found",
+        )
+
+    if not operator.is_global and run.tenant_id != operator.tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cannot access executions from other tenants",
         )
 
     question = run.input.get("question") if run.input else None
@@ -162,6 +265,8 @@ async def list_recent_executions(
 
     summaries = []
     for run in runs:
+        if not operator.is_global and run.tenant_id != operator.tenant_id:
+            continue
         q = run.input.get("question") if run.input else None
         a = run.output.get("answer") if run.output else None
         w = run.output.get("warnings", []) if run.output else []
@@ -207,7 +312,7 @@ async def get_evaluation_trends(
             result = await session.execute(stmt)
             rows = result.all()
     except Exception:
-        rows = []  # unit test environment without DB
+        rows = []
 
     if not rows:
         return [
@@ -280,15 +385,17 @@ async def get_ingestion_status(
     try:
         session_factory = get_session_factory()
         async with session_factory() as session:
+            tenant_filter = {} if operator.is_global else {"tenant_id": operator.tenant_id}
             stmt = (
                 select(Source.tenant_id, func.count(Source.source_id).label("doc_count"))
+                .filter_by(**tenant_filter)
                 .where(Source.is_active == True)  # noqa: E712
                 .group_by(Source.tenant_id)
             )
             result = await session.execute(stmt)
             rows = result.all()
     except Exception:
-        rows = []  # unit test environment without DB
+        rows = []
 
     if not rows:
         return [
@@ -328,29 +435,33 @@ async def get_review_queue(
     try:
         session_factory = get_session_factory()
         async with session_factory() as session:
+            tenant_cond = (
+                [] if operator.is_global else [ExecutionRun.tenant_id == operator.tenant_id]
+            )
             stmt = (
-                select(HumanReviewItem)
-                .where(HumanReviewItem.decision.is_(None))
+                select(HumanReviewItem, ExecutionRun.tenant_id.label("run_tenant_id"))
+                .join(ExecutionRun, ExecutionRun.run_id == HumanReviewItem.run_id, isouter=True)
+                .where(*tenant_cond, HumanReviewItem.decision.is_(None))
                 .order_by(HumanReviewItem.created_at.desc())
                 .limit(limit)
             )
             if type_filter:
                 stmt = stmt.where(HumanReviewItem.item_type == type_filter)
             result = await session.execute(stmt)
-            items = result.scalars().all()
+            rows = result.all()
     except Exception:
-        items = []  # unit test environment without DB
+        rows = []
 
     return [
         ReviewQueueItem(
-            item_id=item.review_id,
-            type=item.item_type,
-            description=f"Review {item.item_type}: run={item.run_id}",
+            item_id=review_item.review_id,
+            type=review_item.item_type,
+            description=f"Review {review_item.item_type}: run={review_item.run_id}",
             priority="normal",
-            created_at=item.created_at,
-            tenant_id=str(item.run_id) if item.run_id else "unknown",
+            created_at=review_item.created_at,
+            tenant_id=run_tenant_id or operator.tenant_id,
         )
-        for item in items
+        for review_item, run_tenant_id in rows
     ]
 
 
@@ -367,34 +478,25 @@ async def submit_feedback(
             record = UserFeedback(
                 run_id=feedback.execution_run_id,
                 vote=feedback.vote,
+                category=feedback.category,
+                notes=feedback.notes,
                 correction=feedback.correction,
             )
             session.add(record)
-            await session.flush()
+            await session.commit()
             feedback_id = record.feedback_id
             created_at = record.created_at
-    except Exception:
-        feedback_id = uuid4()
-        created_at = datetime.now(UTC)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to record feedback: {exc}",
+        ) from exc
 
     return FeedbackResponse(
         feedback_id=feedback_id,
         status="recorded",
         created_at=created_at,
     )
-
-
-class ReviewDecisionSubmission(BaseModel):
-    review_id: UUID
-    decision: str = Field(pattern="^(approved|rejected)$")
-    notes: str | None = None
-
-
-class ReviewDecisionResponse(BaseModel):
-    review_id: UUID
-    decision: str
-    decided_by: str
-    decided_at: datetime
 
 
 @router.post("/review/decisions", response_model=ReviewDecisionResponse)
@@ -404,6 +506,8 @@ async def submit_review_decision(
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> ReviewDecisionResponse:
     """Submit a decision for a review queue item."""
+    not_found = False
+    resolved_at: datetime | None = None
     try:
         session_factory = get_session_factory()
         async with session_factory() as session:
@@ -418,13 +522,32 @@ async def submit_review_decision(
             )
             await session.execute(stmt)
             await session.commit()
-            decided_at = datetime.now(UTC)
-    except Exception:
-        decided_at = datetime.now(UTC)
+            result = await session.execute(
+                select(HumanReviewItem.decided_at).where(
+                    HumanReviewItem.review_id == decision.review_id
+                )
+            )
+            row = result.scalar_one_or_none()
+            not_found = row is None
+            resolved_at = datetime.now(UTC) if not_found else row
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to record decision",
+        ) from exc
+
+    if not_found:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Review item {decision.review_id} not found",
+        )
+
+    # mypy/pyright narrow here; for extra safety:
+    assert resolved_at is not None
 
     return ReviewDecisionResponse(
         review_id=decision.review_id,
         decision=decision.decision,
         decided_by=operator.operator_id,
-        decided_at=decided_at,
+        decided_at=resolved_at,
     )

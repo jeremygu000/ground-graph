@@ -1,6 +1,10 @@
 # Kubernetes manifests for GroundGraph production deployment.
-# Namespace: groundgraph
-# Usage: kubectl apply -f deploy/kubernetes/
+#
+# Usage with Kustomize (recommended):
+#   kubectl kustomize deploy/kubernetes/overlays/production
+#
+# Or render and apply manually:
+#   envsubst < deploy/kubernetes/deployment.yaml | kubectl apply -f -
 ---
 apiVersion: v1
 kind: Namespace

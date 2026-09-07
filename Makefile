@@ -68,7 +68,7 @@ test-stack: ## Run docker-compose full-stack smoke tests
 
 .PHONY: test-fault
 test-fault: ## Run fault injection tests (M11 production hardening)
-	@uv run pytest tests/component/test_fault_injection.py -v --timeout=120 || true
+	@uv run pytest tests/component/test_fault_injection.py -v --timeout=120
 
 .PHONY: test-all
 test-all: ## Run all tests including integration

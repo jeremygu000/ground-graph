@@ -461,6 +461,8 @@ class UserFeedback(Base):
         PG_UUID, ForeignKey("execution_runs.run_id", ondelete="CASCADE"), nullable=False
     )
     vote: Mapped[str] = mapped_column(String(20), nullable=False)
+    category: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     correction: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

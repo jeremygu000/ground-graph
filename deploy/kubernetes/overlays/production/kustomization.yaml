@@ -1,0 +1,21 @@
+# Kubernetes Kustomize overlay for GroundGraph production deployment.
+#
+# Requires envsubst (part of gettext package) to render templates.
+# Usage:
+#   cp .env.prod .env   # fill in real values
+#   ./scripts/render-k8s.sh
+#   kubectl apply -f deploy/kubernetes/overlays/production/
+#
+# Or without the render script (recommended for CI):
+#   kubectl kustomize deploy/kubernetes/overlays/production/
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: groundgraph
+
+resources:
+  - ../../base
+
+patchesStrategicMerge:
+  - patches.yaml

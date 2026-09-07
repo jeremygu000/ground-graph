@@ -1,0 +1,102 @@
+# Production patches for GroundGraph API deployment.
+# These patches are applied over the base manifests via Kustomize.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: groundgraph-api
+  namespace: groundgraph
+spec:
+  replicas: 2
+  template:
+    spec:
+      containers:
+        - name: api
+          image: groundgraph/api:latest
+          env:
+            - name: APP_ENV
+              value: "production"
+            - name: LOG_LEVEL
+              value: "INFO"
+            - name: AUTH_MODE
+              value: "oidc"
+            - name: AUTH_JWKS_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: groundgraph-config
+                  key: AUTH_JWKS_URL
+            - name: AUTH_ISSUER
+              valueFrom:
+                configMapKeyRef:
+                  name: groundgraph-config
+                  key: AUTH_ISSUER
+            - name: AUTH_AUDIENCE
+              valueFrom:
+                configMapKeyRef:
+                  name: groundgraph-config
+                  key: AUTH_AUDIENCE
+            - name: POSTGRES_HOST
+              value: "pgvector"
+            - name: POSTGRES_PORT
+              value: "5432"
+            - name: NEO4J_URI
+              value: "bolt://neo4j:7687"
+            - name: NEO4J_USER
+              valueFrom:
+                secretKeyRef:
+                  name: groundgraph-secrets
+                  key: neo4j-user
+            - name: NEO4J_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: groundgraph-secrets
+                  key: neo4j-password
+            - name: OTEL_SERVICE_NAME
+              value: "groundgraph-api"
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              valueFrom:
+                configMapKeyRef:
+                  name: groundgraph-config
+                  key: OTEL_EXPORTER_OTLP_ENDPOINT
+            - name: S3_ENDPOINT_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: groundgraph-config
+                  key: S3_ENDPOINT_URL
+            - name: S3_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: groundgraph-secrets
+                  key: s3-access-key
+            - name: S3_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: groundgraph-secrets
+                  key: s3-secret-key
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: groundgraph-config
+  namespace: groundgraph
+data:
+  AUTH_JWKS_URL: "CHANGE_ME"
+  AUTH_ISSUER: "CHANGE_ME"
+  AUTH_AUDIENCE: "CHANGE_ME"
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
+  S3_ENDPOINT_URL: "http://minio:9000"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: groundgraph-secrets
+  namespace: groundgraph
+type: Opaque
+stringData:
+  postgres-user: "groundgraph"
+  postgres-password: "CHANGE_ME"
+  neo4j-user: "neo4j"
+  neo4j-password: "CHANGE_ME"
+  neo4j-auth: "neo4j/CHANGE_ME"
+  s3-access-key: "CHANGE_ME"
+  s3-secret-key: "CHANGE_ME"

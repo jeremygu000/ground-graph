@@ -25,33 +25,13 @@ x-s3-env: &s3-env
   S3_BUCKET_PROCESSED: ${S3_BUCKET_PROCESSED:-groundgraph-processed}
 
 services:
-  postgres:
-    image: postgres:16-alpine
-    environment:
-      <<: *pg-env
-      POSTGRES_EXTENSIONS: pgvector,pg_partman
-    volumes:
-      - pg_data:/var/lib/postgresql/data
-      - ./postgres/initdb.d:/docker-entrypoint-initdb.d:ro
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    deploy:
-      resources:
-        limits:
-          memory: 2G
-        reservations:
-          memory: 512M
-    restart: unless-stopped
-
   pgvector:
     image: pgvector/pgvector:pg16
     environment:
       <<: *pg-env
     volumes:
       - pgvec_data:/var/lib/postgresql/data
+      - ./postgres/initdb.d:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s
@@ -141,6 +121,8 @@ services:
     build:
       context: ../..
       dockerfile: deploy/docker/Dockerfile.prod
+    env_file:
+      - ../../.env.prod
     environment:
       <<: *pg-env
       <<: *s3-env
@@ -150,8 +132,9 @@ services:
       AUTH_JWKS_URL: ${AUTH_JWKS_URL:-}
       AUTH_ISSUER: ${AUTH_ISSUER:-}
       AUTH_AUDIENCE: ${AUTH_AUDIENCE:-}
-      POSTGRES_HOST: postgres
+      POSTGRES_HOST: pgvector
       POSTGRES_PORT: "5432"
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?OPENAI_API_KEY is required}
       NEO4J_URI: bolt://neo4j:7687
       NEO4J_USER: ${NEO4J_USER:-neo4j}
       NEO4J_PASSWORD: ${NEO4J_PASSWORD}
@@ -161,8 +144,6 @@ services:
     ports:
       - "8000:8000"
     depends_on:
-      postgres:
-        condition: service_healthy
       pgvector:
         condition: service_healthy
       neo4j:
@@ -183,7 +164,6 @@ services:
     restart: unless-stopped
 
 volumes:
-  pg_data:
   pgvec_data:
   neo4j_data:
   minio_data:

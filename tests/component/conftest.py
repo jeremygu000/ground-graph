@@ -127,7 +127,7 @@ def postgres_component(docker_available: bool) -> Generator[PostgresComponent, N
     if not docker_available:
         pytest.skip("Docker is not available; skipping component test.")
 
-    from testcontainers.community.postgres import PostgresContainer  # noqa: PLC0415
+    from testcontainers.community.postgres import PostgresContainer
 
     # pgvector 0.8.6 ships on top of PG 16.
     container = PostgresContainer(
@@ -197,7 +197,7 @@ def neo4j_component(docker_available: bool) -> Generator[Neo4jComponent, None, N
     if not docker_available:
         pytest.skip("Docker is not available; skipping component test.")
 
-    from testcontainers.community.neo4j import Neo4jContainer  # noqa: PLC0415
+    from testcontainers.community.neo4j import Neo4jContainer
 
     container = Neo4jContainer(image=NEO4J_IMAGE, password="change-me-local-only")
     container.start()
@@ -223,7 +223,7 @@ def neo4j_component(docker_available: bool) -> Generator[Neo4jComponent, None, N
 
 def _wait_postgres_ready(comp: PostgresComponent, timeout: float) -> None:
     """Block until Postgres accepts connections or timeout expires."""
-    import socket  # noqa: PLC0415
+    import socket
 
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -243,7 +243,7 @@ def _wait_neo4j_ready(comp: Neo4jComponent, timeout: float) -> None:
     come up in stages.
     """
     try:
-        from neo4j import GraphDatabase  # noqa: PLC0415
+        from neo4j import GraphDatabase
     except ImportError as exc:
         raise RuntimeError("neo4j driver not installed; component test cannot run") from exc
 

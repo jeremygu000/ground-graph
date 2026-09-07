@@ -1,0 +1,152 @@
+# Base Kubernetes manifests for GroundGraph.
+# Namespace + infrastructure services (Neo4j, PostgreSQL/pgvector via StatefulSets).
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: groundgraph
+  labels:
+    app.kubernetes.io/name: groundgraph
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: groundgraph-pgvector
+  namespace: groundgraph
+spec:
+  type: ClusterIP
+  ports:
+    - port: 5432
+      targetPort: 5432
+  selector:
+    app: pgvector
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: pgvector
+  namespace: groundgraph
+spec:
+  serviceName: groundgraph-pgvector
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pgvector
+  template:
+    metadata:
+      labels:
+        app: pgvector
+    spec:
+      containers:
+        - name: pgvector
+          image: pgvector/pgvector:pg16
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: groundgraph-secrets
+                  key: postgres-user
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: groundgraph-secrets
+                  key: postgres-password
+            - name: POSTGRES_DB
+              value: groundgraph
+          ports:
+            - containerPort: 5432
+          volumeMounts:
+            - name: pgdata
+              mountPath: /var/lib/postgresql/data
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "4Gi"
+              cpu: "2000m"
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "groundgraph"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "groundgraph"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+      volumes:
+        - name: pgdata
+          persistentVolumeClaim:
+            claimName: pgvector-pvc
+  volumeClaimTemplates:
+    - metadata:
+        name: pgdata
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 20Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pgvector-pvc
+  namespace: groundgraph
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: groundgraph-neo4j
+  namespace: groundgraph
+spec:
+  type: ClusterIP
+  ports:
+    - port: 7687
+      targetPort: 7687
+  selector:
+    app: neo4j
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: neo4j
+  namespace: groundgraph
+spec:
+  serviceName: groundgraph-neo4j
+  replicas: 1
+  selector:
+    matchLabels:
+      app: neo4j
+  template:
+    metadata:
+      labels:
+        app: neo4j
+    spec:
+      containers:
+        - name: neo4j
+          image: neo4j:5.22-community
+          env:
+            - name: NEO4J_AUTH
+              valueFrom:
+                secretKeyRef:
+                  name: groundgraph-secrets
+                  key: neo4j-auth
+            - name: NEO4J_PLUGINS
+              value: '["apoc", "graph-data-science"]'
+          ports:
+            - containerPort: 7687
+              name: bolt
+          resources:
+            requests:
+              memory: "1Gi"
+              cpu: "500m"
+            limits:
+              memory: "4Gi"
+              cpu: "2000m"

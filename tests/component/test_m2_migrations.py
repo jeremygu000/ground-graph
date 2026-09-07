@@ -42,7 +42,7 @@ def _run_alembic(dsn: str, command: list[str], cwd: Path) -> subprocess.Complete
 
 
 async def _setup_postgres_container() -> PostgresComponent:
-    from testcontainers.community.postgres import PostgresContainer  # noqa: PLC0415
+    from testcontainers.community.postgres import PostgresContainer
 
     container = PostgresContainer(
         image=POSTGRES_IMAGE,

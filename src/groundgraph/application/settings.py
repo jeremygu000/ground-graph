@@ -107,6 +107,7 @@ class Settings(BaseSettings):
     auth_jwks_url: str | None = None
     auth_issuer: str | None = None
     auth_audience: str | None = None
+    auth_local_secret: SecretStr = Field(default=SecretStr("local-dev-secret-change-in-production"))
 
     ontology_version: str = "v0.1.0"
     index_version: str = "v0.1.0"
