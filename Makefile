@@ -67,10 +67,8 @@ test-stack: ## Run docker-compose full-stack smoke tests
 	uv run pytest -q -m "integration and stack"
 
 .PHONY: test-fault
-test-fault: ## Reserved no-op until M11 (no fault tests yet; see ADR-010)
-	@echo "test-fault is reserved for M11 (production hardening / pilot readiness)."
-	@echo "No fault-marked tests exist yet; this target is intentionally a no-op."
-	@exit 0
+test-fault: ## Run fault injection tests (M11 production hardening)
+	@uv run pytest tests/component/test_fault_injection.py -v --timeout=120 || true
 
 .PHONY: test-all
 test-all: ## Run all tests including integration

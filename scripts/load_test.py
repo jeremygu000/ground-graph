@@ -53,16 +53,17 @@ class LoadTestStats:
     latencies: list[float] = field(default_factory=list)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
-    def record(self, latency: float, status: int) -> None:
-
-        if status >= 500:  # noqa: PLR2004
-            self.server_errors += 1
-        elif status >= 400:  # noqa: PLR2004
-            self.client_errors += 1
-        else:
-            self.requests += 1
-        self.errors += 1
-        self.latencies.append(latency)
+    async def record(self, latency: float, status: int) -> None:
+        async with self.lock:
+            if status >= 500:  # noqa: PLR2004
+                self.server_errors += 1
+                self.errors += 1
+            elif status >= 400:  # noqa: PLR2004
+                self.client_errors += 1
+                self.errors += 1
+            else:
+                self.requests += 1
+            self.latencies.append(latency)
 
     async def report(self) -> dict[str, Any]:
         async with self.lock:

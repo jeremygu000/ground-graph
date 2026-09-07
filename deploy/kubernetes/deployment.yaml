@@ -29,7 +29,12 @@ metadata:
 data:
   APP_ENV: "production"
   LOG_LEVEL: "INFO"
-  AUTH_MODE: "jwt"
+  AUTH_MODE: "oidc"
+  AUTH_JWKS_URL: "${AUTH_JWKS_URL}"
+  AUTH_ISSUER: "${AUTH_ISSUER}"
+  AUTH_AUDIENCE: "${AUTH_AUDIENCE}"
+  POSTGRES_HOST: "postgres"
+  POSTGRES_PORT: "5432"
   NEO4J_URI: "bolt://neo4j:7687"
   S3_ENDPOINT_URL: "http://minio:9000"
   OTEL_SERVICE_NAME: "groundgraph-api"

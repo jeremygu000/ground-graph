@@ -71,6 +71,14 @@ class ExecutionRepository:
             return None
         return self._sql_run_to_domain(sql_run)
 
+    async def list_recent_runs(self, limit: int = 20) -> list[ExecutionRun]:
+        """List the most recent execution runs ordered by started_at descending."""
+        result = await self._session.execute(
+            select(SQLExecutionRun).order_by(SQLExecutionRun.started_at.desc()).limit(limit)
+        )
+        sql_runs = result.scalars().all()
+        return [self._sql_run_to_domain(sql_run) for sql_run in sql_runs]
+
     async def update_run_status(  # noqa: PLR0917
         self,
         run_id: UUID,

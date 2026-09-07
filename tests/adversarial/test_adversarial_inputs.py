@@ -15,8 +15,11 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
+from fastapi import HTTPException
 
+from groundgraph.api import dependencies
 from groundgraph.api.dependencies import Identity, get_identity
+from groundgraph.application.settings import Settings
 from groundgraph.domain.knowledge import KnowledgeFact
 from groundgraph.domain.retrieval import QueryResponse
 
@@ -140,14 +143,18 @@ class TestACLBypassAttempts:
 class TestPrivilegeEscalation:
     """Tests for privilege escalation prevention."""
 
-    def test_unauthenticated_request_rejected(self) -> None:
+    def test_unauthenticated_request_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Requests without identity headers should be rejected at the FastAPI layer."""
+
+        mock_settings = Settings(auth_mode="header", auth_trusted_headers=True)
+        monkeypatch.setattr(dependencies, "get_settings", lambda: mock_settings)
 
         class FakeRequest:
             pass
 
-        with pytest.raises((ValueError, TypeError)):
+        with pytest.raises(HTTPException) as exc_info:
             get_identity(FakeRequest())  # type: ignore[arg-type]
+        assert exc_info.value.status_code == 401
 
     def test_wildcard_principal_accepted_by_model(self) -> None:
         """Wildcard principals are accepted by the Identity model.

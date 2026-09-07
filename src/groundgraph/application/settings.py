@@ -104,6 +104,9 @@ class Settings(BaseSettings):
     auth_default_principal: str = "engineering"
     auth_default_tenant: str = "default"
     auth_trusted_headers: bool = False
+    auth_jwks_url: str | None = None
+    auth_issuer: str | None = None
+    auth_audience: str | None = None
 
     ontology_version: str = "v0.1.0"
     index_version: str = "v0.1.0"

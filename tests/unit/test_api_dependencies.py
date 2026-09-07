@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any, cast
 
 import pytest
+from fastapi import HTTPException
 from pydantic import SecretStr
 
 from groundgraph.api import dependencies
@@ -174,8 +175,17 @@ def test_build_health_service_wires_checkers() -> None:
     assert set(service.checkers) == {"postgres", "neo4j", "minio"}
 
 
-def test_get_identity_returns_identity_when_headers_present() -> None:
-    """get_identity extracts tenant_id and principal from trusted headers."""
+def test_get_identity_returns_identity_when_headers_present(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """get_identity extracts tenant_id and principal from trusted headers in header auth mode."""
+    mock_settings = Settings(
+        auth_mode="header",
+        auth_trusted_headers=True,
+        auth_default_tenant="ignored-in-header-mode",
+        auth_default_principal="ignored-in-header-mode",
+    )
+    monkeypatch.setattr(dependencies, "get_settings", lambda: mock_settings)
     mock_request = object()
 
     identity = dependencies.get_identity(
@@ -188,20 +198,30 @@ def test_get_identity_returns_identity_when_headers_present() -> None:
     assert identity.principal == "user-456"
 
 
-def test_get_identity_raises_when_tenant_id_missing() -> None:
-    """get_identity raises ValueError when X-Tenant-ID is missing."""
+def test_get_identity_raises_when_tenant_id_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """get_identity raises HTTPException 401 when X-Tenant-ID is missing in header auth mode."""
+    mock_settings = Settings(auth_mode="header", auth_trusted_headers=True)
+    monkeypatch.setattr(dependencies, "get_settings", lambda: mock_settings)
     mock_request = cast(Any, object())
 
-    with pytest.raises(ValueError, match="X-Tenant-ID header is required"):
+    with pytest.raises(HTTPException) as exc_info:
         dependencies.get_identity(request=mock_request, x_tenant_id=None, x_principal="user-1")
+    assert exc_info.value.status_code == 401
 
 
-def test_get_identity_raises_when_principal_missing() -> None:
-    """get_identity raises ValueError when X-Principal is missing."""
+def test_get_identity_raises_when_principal_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """get_identity raises HTTPException 401 when X-Principal is missing in header auth mode."""
+    mock_settings = Settings(auth_mode="header", auth_trusted_headers=True)
+    monkeypatch.setattr(dependencies, "get_settings", lambda: mock_settings)
     mock_request = cast(Any, object())
 
-    with pytest.raises(ValueError, match="X-Principal header is required"):
+    with pytest.raises(HTTPException) as exc_info:
         dependencies.get_identity(request=mock_request, x_tenant_id="tenant-1", x_principal=None)
+    assert exc_info.value.status_code == 401
 
 
 def test_request_id_from_headers_prefers_request_id_over_correlation_id() -> None:

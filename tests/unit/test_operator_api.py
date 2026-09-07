@@ -123,6 +123,7 @@ class TestFeedbackSubmission:
             headers={"X-Operator-ID": "operator-1"},
             json={
                 "execution_run_id": str(uuid4()),
+                "vote": "thumbs_up",
                 "category": "correct_answer",
                 "notes": "Looks good",
             },

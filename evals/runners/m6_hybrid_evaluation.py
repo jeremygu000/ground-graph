@@ -218,7 +218,7 @@ async def _setup_neo4j_fixtures(driver: Any) -> dict[str, UUID]:
     return entity_ids
 
 
-async def _evaluate_case(
+async def _evaluate_case(  # noqa: PLR0912
     case: dict[str, Any],
     repo: Neo4jGraphRepository,
     entity_ids: dict[str, UUID],
@@ -288,11 +288,31 @@ async def _evaluate_case(
     hybrid_recall = 1.0 if expected_found else 0.0
     hybrid_precision = 1.0 / len(found_object_names) if found_object_names else 0.0
 
-    vector_recall = 0.0
-    vector_precision = 0.0
+    vector_evidence = await svc.retrieve_evidence(
+        seed_entities=[entity_seed],
+        predicates=[case.get("expected_predicate")] if case.get("expected_predicate") else None,
+        valid_at=valid_at,
+        max_depth=1,
+        tenant_id=case.get("tenant_id", "eval-tenant"),
+        principal=principal,
+    )
+    vector_object_names: list[str] = []
+    for ev in vector_evidence:
+        if ev.graph_path_fact_ids:
+            last_fact_id = ev.graph_path_fact_ids[-1]
+            obj_id = await _get_object_id_from_fact(repo, last_fact_id, seed_id)
+            if obj_id:
+                obj_name = await _get_object_name(repo, obj_id)
+                if obj_name:
+                    vector_object_names.append(obj_name)
+    vector_expected_found = expected_object in vector_object_names if expected_object else False
+    vector_recall = 1.0 if vector_expected_found else 0.0
+    vector_precision = 1.0 / len(vector_object_names) if vector_object_names else 0.0
 
-    if hybrid_recall > vector_recall:
-        relative_improvement = (hybrid_recall - vector_recall) / max(vector_recall, 0.001) * 100
+    if hybrid_recall > vector_recall > 0:
+        relative_improvement = (hybrid_recall - vector_recall) / vector_recall * 100
+    elif hybrid_recall > vector_recall and vector_recall == 0.0:
+        relative_improvement = None
     elif hybrid_recall == vector_recall == 0.0:
         relative_improvement = 0.0
     else:
@@ -391,9 +411,12 @@ async def run_evaluation() -> dict[str, Any]:
             if multi_hop_hybrid_recalls
             else 0.0
         )
-        multi_hop_relative_improvement = (
-            (multi_hop_avg_hybrid - multi_hop_avg_vector) / max(multi_hop_avg_vector, 0.001)
-        ) * 100
+        if multi_hop_avg_vector > 0:
+            multi_hop_relative_improvement = (
+                (multi_hop_avg_hybrid - multi_hop_avg_vector) / multi_hop_avg_vector
+            ) * 100
+        else:
+            multi_hop_relative_improvement = None
 
         return {
             "status": "completed",
@@ -404,7 +427,12 @@ async def run_evaluation() -> dict[str, Any]:
             "hybrid_avg_graph_recall": avg_hybrid_recall,
             "relative_improvement_pct": avg_improvement_pct,
             "multi_hop_relative_improvement_pct": multi_hop_relative_improvement,
-            "meets_15_percent_target": multi_hop_relative_improvement >= IMPROVEMENT_TARGET_PCT,
+            "multi_hop_avg_vector_recall": multi_hop_avg_vector,
+            "multi_hop_avg_hybrid_recall": multi_hop_avg_hybrid,
+            "meets_15_percent_target": (
+                multi_hop_relative_improvement is not None
+                and multi_hop_relative_improvement >= IMPROVEMENT_TARGET_PCT
+            ),
             "cases": results,
         }
     finally:

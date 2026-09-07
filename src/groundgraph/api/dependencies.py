@@ -9,7 +9,8 @@ from typing import Annotated, Any, cast
 
 import asyncpg  # pyright: ignore[reportMissingTypeStubs]
 import httpx
-from fastapi import Depends, Header, Request
+from fastapi import Depends, Header, HTTPException, Request, status
+from jose import JWTError, jwt
 from neo4j import AsyncGraphDatabase
 from pydantic import BaseModel
 
@@ -50,34 +51,165 @@ MAX_REQUEST_ID_LENGTH = 128
 
 
 class Identity(BaseModel):
-    """Trusted identity extracted from the authenticated request context.
+    """Trusted identity extracted from a verified authentication context.
 
-    In production this would be populated from a verified JWT, mTLS client cert,
-    or similar trusted auth mechanism.  The current implementation extracts from
-    well-known request headers set by a trusted upstream gateway.
+    In auth_mode=oidc, tenant_id and principal are extracted from verified
+    JWT claims.  In auth_mode=local, defaults from settings are used (dev only).
+    In auth_mode=header, headers must come from a trusted gateway with
+    auth_trusted_headers=True.
     """
 
     tenant_id: str
     principal: str
 
 
+_jwks_cache: dict[str, Any] = {}
+_jwks_lock = asyncio.Lock()
+
+
+async def _fetch_jwks(jwks_url: str) -> dict[str, Any]:
+    """Fetch and cache JWKS from the OIDC provider."""
+    async with _jwks_lock:
+        if jwks_url in _jwks_cache:
+            return _jwks_cache[jwks_url]
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(jwks_url)
+            response.raise_for_status()
+            _jwks_cache[jwks_url] = response.json()
+            return _jwks_cache[jwks_url]
+
+
+def _get_identity_from_jwt(token: str, settings: Settings) -> Identity:
+    """Verify a JWT and extract tenant/principal claims.
+
+    Raises HTTPException(401) on verification failure.
+    """
+    try:
+        unverified_header = jwt.get_unverified_header(token)
+    except JWTError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Invalid JWT header: {exc}",
+        ) from exc
+
+    jwks_url = settings.auth_jwks_url
+    if not jwks_url:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="auth_jwks_url not configured for oidc auth mode",
+        )
+
+    try:
+        jwks = asyncio.run(_fetch_jwks(jwks_url))
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Failed to fetch JWKS: {exc}",
+        ) from exc
+
+    rsa_key: dict[str, Any] | None = None
+    for key in jwks.get("keys", []):
+        if key.get("kid") == unverified_header.get("kid"):
+            rsa_key = key
+            break
+
+    if not rsa_key:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="No matching key found in JWKS",
+        )
+
+    try:
+        claims = jwt.decode(
+            token,
+            rsa_key,
+            algorithms=["RS256"],
+            audience=settings.auth_audience,
+            issuer=settings.auth_issuer,
+        )
+    except JWTError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"JWT verification failed: {exc}",
+        ) from exc
+
+    tenant_id = claims.get("tenant_id") or claims.get("tid") or claims.get("org_id")
+    principal = claims.get("sub") or claims.get("email") or claims.get("preferred_username")
+
+    if not tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="JWT missing required tenant_id claim",
+        )
+    if not principal:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="JWT missing required principal (sub) claim",
+        )
+
+    return Identity(tenant_id=tenant_id, principal=principal)
+
+
 def get_identity(
     request: Request,
-    x_tenant_id: str | None = Header(default=None, alias="X-Tenant-ID"),
-    x_principal: str | None = Header(default=None, alias="X-Principal"),
+    x_tenant_id: Annotated[str | None, Header(alias="X-Tenant-ID")] = None,
+    x_principal: Annotated[str | None, Header(alias="X-Principal")] = None,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
 ) -> Identity:
-    """Extract trusted identity from request headers.
+    """Extract verified identity based on auth_mode.
 
-    In production, replace this with a real auth mechanism (JWT verification,
-    mTLS identity, etc.).  The header-based approach is acceptable as a
-    development/trusted-gateway pattern where the API gateway is the only
-    component that populates these headers.
+    - oidc: Verify JWT bearer token from Authorization header. tenant_id and
+      principal are extracted from verified token claims. This is the production
+      mode when GroundGraph is deployed behind an API gateway that issues JWTs.
+    - header: Trust X-Tenant-ID / X-Principal headers only when
+      auth_trusted_headers=True (i.e., the gateway is a trusted reverse proxy
+      that has already authenticated the client).
+    - local: Use default tenant/principal from settings. FOR DEVELOPMENT ONLY.
     """
-    if not x_tenant_id:
-        raise ValueError("X-Tenant-ID header is required")
-    if not x_principal:
-        raise ValueError("X-Principal header is required")
-    return Identity(tenant_id=x_tenant_id, principal=x_principal)
+    settings = get_settings()
+    mode = settings.auth_mode
+
+    if mode == "oidc":
+        if not authorization or not authorization.startswith("Bearer "):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Bearer token required for oidc auth mode",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        token = authorization[7:]
+        return _get_identity_from_jwt(token, settings)
+
+    if mode == "header":
+        if not settings.auth_trusted_headers:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=(
+                    "X-Tenant-ID/X-Principal headers not trusted in header auth mode. "
+                    "Set AUTH_TRUSTED_HEADERS=true only when behind a trusted gateway."
+                ),
+            )
+        if not x_tenant_id:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="X-Tenant-ID header required",
+            )
+        if not x_principal:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="X-Principal header required",
+            )
+        return Identity(tenant_id=x_tenant_id, principal=x_principal)
+
+    if mode == "local":
+        return Identity(
+            tenant_id=settings.auth_default_tenant,
+            principal=settings.auth_default_principal,
+        )
+
+    raise HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail=f"Unknown auth_mode: {mode}",
+    )
 
 
 def request_id_from_headers(headers: list[tuple[bytes, bytes]]) -> str:

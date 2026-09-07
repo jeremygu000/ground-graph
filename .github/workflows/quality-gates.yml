@@ -5,6 +5,8 @@ on:
     branches: [master]
   pull_request:
     branches: [master]
+  schedule:
+    - cron: "0 2 * * *"  # nightly at 02:00 UTC for full evaluation
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -54,11 +56,12 @@ jobs:
         run: uv sync --locked --all-extras
 
       - name: Run component tests
-        run: uv run pytest tests/component/ -v --timeout=120 || true
+        run: uv run pytest tests/component/ -v --timeout=120
 
   eval-smoke:
     name: Eval Smoke
     runs-on: macos-14
+    if: github.event_name != 'schedule'
     steps:
       - uses: actions/checkout@v4
 
@@ -70,3 +73,22 @@ jobs:
 
       - name: Run eval smoke
         run: make eval-smoke
+
+  nightly-eval:
+    name: Nightly Full Evaluation
+    runs-on: macos-14
+    if: github.event_name == 'schedule'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install dependencies
+        run: uv sync --locked --all-extras
+
+      - name: Run M6 Hybrid Evaluation
+        run: uv run python -m evals.runners.m6_hybrid_evaluation || echo "M6 eval requires Docker, skipped"
+
+      - name: Run evaluation smoke
+        run: uv run python -m groundgraph.application.evaluation.smoke

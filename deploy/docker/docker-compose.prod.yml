@@ -32,8 +32,7 @@ services:
       POSTGRES_EXTENSIONS: pgvector,pg_partman
     volumes:
       - pg_data:/var/lib/postgresql/data
-      - ./postgres/postgresql.conf:/etc/postgresql/conf.d/custom.conf:ro
-    command: postgres -c config_file=/etc/postgresql/conf.d/custom.conf
+      - ./postgres/initdb.d:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s
@@ -113,7 +112,7 @@ services:
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.115.0
     volumes:
-      - ./otel/otel-config.yaml:/etc/otelcol-contrib/config.yaml:ro
+      - ./otel/collector-config.yaml:/etc/otelcol-contrib/config.yaml:ro
     command: ["--config", "/etc/otelcol-contrib/config.yaml"]
     deploy:
       resources:
@@ -124,7 +123,7 @@ services:
   prometheus:
     image: prom/prometheus:v2.54.1
     volumes:
-      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../../prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
@@ -147,14 +146,18 @@ services:
       <<: *s3-env
       APP_ENV: production
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      AUTH_MODE: ${AUTH_MODE:-jwt}
+      AUTH_MODE: ${AUTH_MODE:-oidc}
+      AUTH_JWKS_URL: ${AUTH_JWKS_URL:-}
+      AUTH_ISSUER: ${AUTH_ISSUER:-}
+      AUTH_AUDIENCE: ${AUTH_AUDIENCE:-}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
       NEO4J_URI: bolt://neo4j:7687
       NEO4J_USER: ${NEO4J_USER:-neo4j}
       NEO4J_PASSWORD: ${NEO4J_PASSWORD}
       S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:-http://minio:9000}
       OTEL_SERVICE_NAME: groundgraph-api
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4317}
-      OTEL_EXPORTER_OTLP_INSECURE: "true"
     ports:
       - "8000:8000"
     depends_on:

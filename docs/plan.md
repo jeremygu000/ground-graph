@@ -53,16 +53,13 @@ Update `[ ]` to `[x]` only after the milestone acceptance criteria and validatio
 - [x] M3 — Document ingestion and versioning
 - [x] M4 — Vector RAG baseline
 - [x] M5 — Knowledge graph construction
-- [x] M6 — Hybrid GraphRAG retrieval (5/5 acceptance criteria verified; 44444% measured improvement over vector-only; 58 component tests pass; 4 graph/ACL/temporal capabilities verified via component tests; evaluation infrastructure (dataset + runner) implemented)
+- [x] M6 — Hybrid GraphRAG retrieval (5/5 acceptance criteria verified; hybrid achieves multi-hop relationship retrieval that vector-only cannot; 58 component tests pass; graph/ACL/temporal capabilities verified via component tests; evaluation infrastructure (dataset + runner) implemented; honest absolute delta reported when vector baseline is 0)
 - [x] M7 — Query workflow, citations, and API (implementation complete per commit 57ca837; replay for failed runs + config version IDs captured per commit 939327c; evaluation smoke module + ADR-004 + ADR-008 implemented per commit cb2244a)
 - [x] M8 — Evaluation system and CI quality gates (DeepEval adapter + JSONL loader + GitHub Actions CI + ADR-006 per commit 0840f53)
 - [x] M9 — Governance, security, and adversarial testing (adversarial test suite + prompt injection detection + ADR-007 per commit bf605ef)
 - [x] M10 — Operator and review interfaces (operator dashboard API + 10 unit tests + ADR-010 per commit 994ba29)
 - [x] M11 — Production hardening and pilot readiness (Dockerfile.prod + docker-compose.prod + K8s manifests + backup scripts + load/canary scripts + runbook + ADR-011 per commit 994ba29)
 - [x] M12 — Post-MVP controlled improvement loop (ADR-012 per commit 994ba29)
-- [ ] M10 — Operator and review interfaces
-- [ ] M11 — Production hardening and pilot readiness
-- [ ] M12 — Post-MVP controlled improvement loop
 
 ---
 
@@ -1692,7 +1689,7 @@ Add safe graph traversal and hybrid evidence fusion, and prove the improvement a
 
 - all three strategies are independently executable ✅;
 - graph path validity and provenance gates pass ✅;
-- hybrid improves multi-hop/relationship accuracy by a target of at least 15% relative to the accepted vector baseline ✅ — measured: 44444% improvement (vector-only: 0.0 graph recall vs hybrid: 0.444 graph recall on multi-hop queries; eval runner: evals/runners/m6_hybrid_evaluation.py; dataset: evals/datasets/m6-hybrid-graph-retrieval-v1.json);
+- hybrid improves multi-hop/relationship accuracy by a target of at least 15% relative to the accepted vector baseline ✅ — measured: hybrid achieves 0.444 multi-hop recall vs vector-only 0.0 (vector-only cannot traverse multi-hop paths); relative improvement undefined when vector baseline is 0; eval runner: evals/runners/m6_hybrid_evaluation.py; dataset: evals/datasets/m6-hybrid-graph-retrieval-v1.json);
 - no ACL leakage occurs ✅;
 - retrieval traces expose safe path/fact IDs, scores, filters, and timing ✅.
 

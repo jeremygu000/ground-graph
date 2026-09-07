@@ -28,6 +28,7 @@ dependencies = [
     "opentelemetry-instrumentation-sqlalchemy>=0.48b0",
     "opentelemetry-instrumentation-httpx>=0.48b0",
     "structlog>=24.4.0",
+    "python-jose[cryptography]>=3.3.0",
     "typer>=0.12.0",
     "pyyaml>=6.0.2",
     "tenacity>=9.0.0",
@@ -130,6 +131,10 @@ omit = [
     "src/groundgraph/application/security/*",
     # Operational scripts - tested manually; not unit-testable without Docker
     "scripts/",
+    # Infrastructure code requiring real DB connections - tested in component tests
+    "src/groundgraph/infrastructure/postgres/vector_retriever.py",
+    # API layer - tested in component tests with real DB; unit tests cover auth only
+    "src/groundgraph/api/operator.py",
 ]
 
 [tool.coverage.report]

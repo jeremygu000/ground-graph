@@ -25,7 +25,6 @@ from groundgraph.api.dependencies import (
 from groundgraph.api.execution import router as execution_router
 from groundgraph.api.health import router as health_router
 from groundgraph.api.operator import router as operator_router
-from groundgraph.api.query import router as query_router
 from groundgraph.api.query import v1_router
 from groundgraph.application.health import HealthService
 from groundgraph.application.settings import Settings, get_settings
@@ -193,7 +192,6 @@ def create_app(  # noqa: PLR0915 - composition root keeps app lifecycle wiring t
     app.state.health_service = health
 
     app.include_router(health_router)
-    app.include_router(query_router)
     app.include_router(v1_router)
     app.include_router(execution_router)
     app.include_router(operator_router)
