@@ -54,9 +54,9 @@ Update `[ ]` to `[x]` only after the milestone acceptance criteria and validatio
 - [x] M4 — Vector RAG baseline
 - [x] M5 — Knowledge graph construction
 - [x] M6 — Hybrid GraphRAG retrieval (5/5 acceptance criteria verified; 44444% measured improvement over vector-only; 58 component tests pass; 4 graph/ACL/temporal capabilities verified via component tests; evaluation infrastructure (dataset + runner) implemented)
-- [ ] M7 — Query workflow, citations, and API (implementation complete per commit 57ca837; replay for failed runs + config version IDs remaining per P0/P1 review)
-- [ ] M8 — Evaluation system and CI quality gates
-- [ ] M9 — Governance, security, and adversarial testing
+- [x] M7 — Query workflow, citations, and API (implementation complete per commit 57ca837; replay for failed runs + config version IDs captured per commit 939327c; evaluation smoke module + ADR-004 + ADR-008 implemented per commit cb2244a)
+- [x] M8 — Evaluation system and CI quality gates (DeepEval adapter + JSONL loader + GitHub Actions CI + ADR-006 per commit 0840f53)
+- [x] M9 — Governance, security, and adversarial testing (adversarial test suite + prompt injection detection + ADR-007 per commit bf605ef)
 - [ ] M10 — Operator and review interfaces
 - [ ] M11 — Production hardening and pilot readiness
 - [ ] M12 — Post-MVP controlled improvement loop
