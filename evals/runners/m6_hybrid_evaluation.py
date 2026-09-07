@@ -477,7 +477,7 @@ async def _evaluate_case(
 
     # Strategy 3: True Hybrid - combining vector + graph via RRF fusion
     hybrid_found_names: list[str] = []
-    if pg_conn is not None and graph_evidence:
+    if pg_conn is not None:
         vector_results = [
             _FakeRetrievedChunk(
                 chunk_id=r["chunk_id"],
@@ -499,11 +499,11 @@ async def _evaluate_case(
     hybrid_expected_found = expected_object in hybrid_found_names if expected_object else False
     hybrid_recall = 1.0 if hybrid_expected_found else 0.0
 
-    if graph_recall > vector_recall > 0:
-        relative_improvement = (graph_recall - vector_recall) / vector_recall * 100
-    elif graph_recall > vector_recall and vector_recall == 0:
+    if hybrid_recall > vector_recall > 0:
+        relative_improvement = (hybrid_recall - vector_recall) / vector_recall * 100
+    elif hybrid_recall > vector_recall and vector_recall == 0:
         relative_improvement = None
-    elif graph_recall == vector_recall:
+    elif hybrid_recall == vector_recall:
         relative_improvement = 0.0
     else:
         relative_improvement = 0.0
@@ -648,24 +648,20 @@ async def run_evaluation() -> dict[str, Any]:  # noqa: PLR0912, PLR0915
             mh_vector = [
                 r["vector_recall"] for r in multi_hop_cases if r.get("vector_recall") is not None
             ]
-            mh_graph_only = [
-                r["graph_only_recall"]
-                for r in multi_hop_cases
-                if r.get("graph_only_recall") is not None
+            mh_hybrid = [
+                r["hybrid_recall"] for r in multi_hop_cases if r.get("hybrid_recall") is not None
             ]
             mh_avg_vector = sum(mh_vector) / len(mh_vector) if mh_vector else 0.0
-            mh_avg_graph_only = sum(mh_graph_only) / len(mh_graph_only) if mh_graph_only else 0.0
+            mh_avg_hybrid = sum(mh_hybrid) / len(mh_hybrid) if mh_hybrid else 0.0
             if mh_avg_vector > 0:
-                mh_relative_improvement = (
-                    (mh_avg_graph_only - mh_avg_vector) / mh_avg_vector
-                ) * 100
-            elif mh_avg_graph_only > 0 and mh_avg_vector == 0:
+                mh_relative_improvement = ((mh_avg_hybrid - mh_avg_vector) / mh_avg_vector) * 100
+            elif mh_avg_hybrid > 0 and mh_avg_vector == 0:
                 mh_relative_improvement = None
             else:
                 mh_relative_improvement = 0.0
         else:
             mh_avg_vector = 0.0
-            mh_avg_graph_only = 0.0
+            mh_avg_hybrid = 0.0
             mh_relative_improvement = None
 
         return {

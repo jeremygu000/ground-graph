@@ -808,9 +808,23 @@ async def transition_proposal(  # noqa: PLR0912, PLR0915
                             "eval_run_id and eval_result"
                         )
                     else:
-                        record.eval_run_id = request.eval_run_id
-                        record.eval_result = request.eval_result
-                        record.status = request.target_status
+                        eval_run_result = await session.execute(
+                            select(EvaluationRun).where(EvaluationRun.run_id == request.eval_run_id)
+                        )
+                        eval_run = eval_run_result.scalar_one_or_none()
+                        if eval_run is None:
+                            missing_guard = True
+                            transition_error_msg = f"Evaluation run {request.eval_run_id} not found"
+                        elif eval_run.status != "completed":
+                            missing_guard = True
+                            transition_error_msg = (
+                                f"Evaluation run {request.eval_run_id} "
+                                f"has status '{eval_run.status}', expected 'completed'"
+                            )
+                        else:
+                            record.eval_run_id = request.eval_run_id
+                            record.eval_result = request.eval_result
+                            record.status = request.target_status
                 elif request.target_status == "APPROVED":
                     if not request.eval_result:
                         missing_guard = True
