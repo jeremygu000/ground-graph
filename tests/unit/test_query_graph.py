@@ -574,3 +574,42 @@ def test_decide_route_returns_fail_when_response_is_none() -> None:
     )
     result = workflow._decide_route(state)
     assert result == "fail"
+
+
+class _FakeHybridSvcThatRaises:
+    async def query_with_evidence(
+        self,
+        question: str,
+        principal: str,
+        tenant_id: str,
+        *,
+        index_name: str | None = None,
+    ) -> HybridRetrievalResult:
+        raise RuntimeError("service error")
+
+
+@pytest.mark.asyncio
+async def test_execute_node_returns_error_on_service_exception() -> None:
+    """_execute_node returns error dict when service raises."""
+    config = QueryWorkflowConfig(
+        session_factory=object(),
+        planner=cast(RetrievalPlanner, _FakePlanner()),
+        embedding_provider=object(),
+        vector_retriever=cast(VectorContentRetriever, object()),
+        keyword_retriever=cast(KeywordRetrieverPort, object()),
+        graph_repository=cast(GraphRepository, object()),
+        reranker=cast(EvidenceReranker, object()),
+        answer_generator=cast(AnswerGenerator, object()),
+        index_version_resolver=cast(IndexVersionResolver, object()),
+        settings=None,
+    )
+    svc_that_raises = _FakeHybridSvcThatRaises()  # type: ignore[assignment]
+    workflow = QueryWorkflow(config)
+    workflow._svc = svc_that_raises  # type: ignore[attr-defined]
+    state = QueryWorkflowState(
+        question="test",
+        principal="user1",
+        tenant_id="tenant1",
+    )
+    result = await workflow._execute_node(state)
+    assert result == {"error": "service error"}

@@ -381,3 +381,41 @@ async def test_hybrid_fuse_passes_through() -> None:
     svc = HybridRetrievalService(config)
     result = await svc.query(question="test", principal="user1", tenant_id="tenant1")
     assert result.status == "answered"
+
+
+@pytest.mark.asyncio
+async def test_resolve_active_index_version_returns_version_id_and_model() -> None:
+    """resolve_active_index_version returns (version_id, embedding_model)."""
+    version_id = uuid4()
+    index = IndexVersionInfo(
+        version_id=version_id,
+        index_name="default",
+        embedding_model="test-embedder",
+        embedding_dimensions=10,
+        is_active=True,
+    )
+    config = _make_config(index=index)
+    svc = HybridRetrievalService(config)
+    result_version_id, embedding_model = await svc.resolve_active_index_version("default")
+    assert result_version_id == version_id
+    assert embedding_model == "test-embedder"
+
+
+@pytest.mark.asyncio
+async def test_resolve_active_index_version_raises_when_no_active() -> None:
+    """resolve_active_index_version raises RuntimeError when no active index version."""
+    svc = HybridRetrievalService(
+        HybridRetrievalConfig(
+            session_factory=object(),
+            embedding_provider=cast(EmbeddingProvider, _FakeEmbeddingProvider()),
+            vector_retriever=cast(VectorContentRetriever, _FakeVectorRetriever()),
+            keyword_retriever=cast(KeywordRetrieverPort, _FakeKeywordRetriever()),
+            graph_repository=cast(GraphRepository, _FakeGraphRepo()),
+            reranker=cast(EvidenceReranker, _FakeReranker()),
+            answer_generator=cast(AnswerGenerator, _FakeAnswerGenerator()),
+            index_version_resolver=cast(IndexVersionResolver, _FakeIndexVersionResolver(None)),
+            planner=cast(Any, _FakeRetrievalPlanner(_FakePlan())),
+        )
+    )
+    with pytest.raises(RuntimeError, match="No active IndexVersion"):
+        await svc.resolve_active_index_version("default")

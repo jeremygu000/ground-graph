@@ -183,6 +183,23 @@ class HybridRetrievalService:
                 unique.append(e)
         return unique
 
+    async def resolve_active_index_version(self, index_name: str | None = None) -> tuple[UUID, str]:
+        """Resolve and return (index_version_id, embedding_model) for the given index.
+
+        The embedding model is validated against the provider's model.
+        Raises RuntimeError if no active version exists.
+        """
+        resolved_name = index_name or self._settings.default_index_name
+        active_index = await self._index_version_resolver.resolve_active(resolved_name)
+        if active_index is None:
+            raise RuntimeError(f"No active IndexVersion for index_name={resolved_name!r}")
+        if active_index.embedding_model != self._embed.model:
+            raise ValueError(
+                f"Embedding model mismatch: index={active_index.embedding_model}, "
+                f"provider={self._embed.model}"
+            )
+        return active_index.version_id, active_index.embedding_model
+
     async def query_with_evidence(
         self,
         question: str,

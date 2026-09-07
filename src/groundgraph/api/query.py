@@ -217,10 +217,15 @@ async def query_v1(
     Execution runs are persisted for audit and replay.
     """
     request_id = http_request.headers.get("x-request-id", f"req-{secrets.token_hex(12)}")
+    index_name = request.index_name
 
     run_input: dict[str, object] = {"question": request.question}
-    if request.index_name:
-        run_input["index_name"] = request.index_name
+    if index_name:
+        run_input["index_name"] = index_name
+
+    index_version_id, _ = await workflow._svc.resolve_active_index_version(index_name)
+    model_version = workflow._settings.generation_model
+    prompt_version_id = None
 
     run = ExecutionRun(
         run_id=uuid4(),
@@ -231,6 +236,9 @@ async def query_v1(
         input=run_input,
         output={},
         started_at=datetime.now(UTC),
+        index_version_id=index_version_id,
+        prompt_version_id=prompt_version_id,
+        model_version=model_version,
     )
     await repo.create_run(run, commit=True)  # type: ignore[attr-defined]
 
