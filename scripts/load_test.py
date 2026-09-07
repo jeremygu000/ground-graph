@@ -49,6 +49,8 @@ SAMPLE_QUESTIONS = [
 ]
 
 ERROR_RATE_THRESHOLD = 5.0
+HTTP_OK = 200
+HTTP_MULTIPLE_CHOICES = 300
 
 
 @dataclass
@@ -84,7 +86,7 @@ class LoadTestStats:
                 "total_errors": self.errors,
                 "client_errors": self.client_errors,
                 "server_errors": self.server_errors,
-                "error_rate": round(self.errors / max(self.requests, 1) * 100, 2),
+                "error_rate": round(self.errors / max(self.requests + self.errors, 1) * 100, 2),
                 "throughput_rps": round(self.requests / max(elapsed, 1), 2),
                 "latency_p50_ms": round(sorted_latencies[int(count * 0.50)] * 1000, 1)
                 if count > 0
@@ -167,7 +169,7 @@ def _build_auth_headers(
 
 
 async def _smoke_check(api_url: str, auth_headers: dict[str, str]) -> bool:
-    """Verify the API is reachable and auth works before starting load test."""
+    """Verify the API is reachable with a 2xx response before starting load test."""
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.post(
@@ -175,7 +177,7 @@ async def _smoke_check(api_url: str, auth_headers: dict[str, str]) -> bool:
                 headers=auth_headers,
                 json={"question": SAMPLE_QUESTIONS[0]},
             )
-            return response.status_code in (200, 401, 403)
+            return HTTP_OK <= response.status_code < HTTP_MULTIPLE_CHOICES
     except Exception:
         return False
 
@@ -208,7 +210,8 @@ def main() -> None:
 
     ready = asyncio.run(_smoke_check(args.api_url, auth_headers))
     if not ready:
-        print("[load-test] WARNING: API smoke check failed; proceeding anyway")
+        print("[load-test] ERROR: API smoke check failed; exiting")
+        raise SystemExit(1)
 
     results = asyncio.run(run_load_test(args.api_url, auth_headers, args.users, args.duration))
 

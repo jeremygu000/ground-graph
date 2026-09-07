@@ -2,9 +2,9 @@
 
 This module provides a synthetic evaluation that measures retrieval quality
 across three strategies for multi-hop relationship queries:
-  1. Vector-only: pgvector similarity search using entity name embeddings
-  2. Graph-1hop:  Neo4j graph traversal with max_depth=1
-  3. Hybrid:      Neo4j graph traversal at full depth (max_depth=2+)
+  1. Vector-only: pgvector similarity search using the user question embedding
+  2. Graph-only:  Neo4j graph traversal at full depth (max_depth=2)
+  3. Hybrid:      True fusion of pgvector results + graph traversal via RRF
 
 For these graph-structured multi-hop queries, vector-only retrieval correctly
 returns little or no evidence (the relationships are in the graph, not chunks).
@@ -24,15 +24,29 @@ import hashlib
 import json
 import random
 import sys
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
-from groundgraph.application.retrieval.graph_fusion import GraphFusionService
+from groundgraph.application.retrieval.graph_fusion import GraphFusionService, hybrid_rrf_fusion
 from groundgraph.domain.knowledge import CanonicalEntity, KnowledgeFact
 from groundgraph.infrastructure.neo4j.repository import Neo4jGraphRepository
 from groundgraph.infrastructure.neo4j.unit_of_work import Neo4jUnitOfWork
+
+
+@dataclass
+class _FakeRetrievedChunk:
+    chunk_id: Any
+    source_id: Any
+    document_id: Any
+    version_id: Any
+    content: str
+    vector_score: float | None
+    keyword_score: float | None
+    allowed_principals: list[str]
+
 
 try:
     import asyncpg
@@ -353,7 +367,34 @@ async def _vector_search(
     return [row["content"] for row in rows]
 
 
-async def _evaluate_case(  # noqa: PLR0912
+async def _vector_search_with_scores(
+    pg_conn: Any,
+    query_text: str,
+    top_k: int,
+    tenant_id: str,
+) -> list[dict[str, Any]]:
+    """Run pgvector similarity search and return matched chunk info with scores."""
+    query_embedding = _make_deterministic_embedding(query_text)
+    query_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
+
+    rows = await pg_conn.fetch(
+        """
+        SELECT c.content, c.metadata, c.chunk_id
+        FROM chunk_embeddings ce
+        JOIN chunks c ON c.chunk_id = ce.chunk_id
+        ORDER BY ce.embedding <=> $1::vector
+        LIMIT $2
+        """,
+        query_str,
+        top_k,
+    )
+    return [
+        {"content": row["content"], "chunk_id": row["chunk_id"], "metadata": row["metadata"]}
+        for row in rows
+    ]
+
+
+async def _evaluate_case(
     case: dict[str, Any],
     repo: Neo4jGraphRepository,
     entity_ids: dict[str, UUID],
@@ -361,9 +402,9 @@ async def _evaluate_case(  # noqa: PLR0912
 ) -> dict[str, Any]:
     """Evaluate a single multi-hop case using three retrieval strategies:
 
-    1. Vector-only:   pgvector similarity search (returns entity name chunks)
-    2. Graph-1hop:    Neo4j graph traversal at max_depth=1
-    3. Hybrid/Graph-N: Neo4j graph traversal at full depth (max_depth=2)
+    1. Vector-only:   pgvector similarity search using the actual user question
+    2. Graph-only:    Neo4j graph traversal at max_depth=2 (no vector component)
+    3. Hybrid:        True fusion of pgvector results + graph traversal via RRF
 
     The metric is whether the expected_object_entity name appears in the
     retrieved results (binary recall) and how many results are returned (precision).
@@ -384,6 +425,7 @@ async def _evaluate_case(  # noqa: PLR0912
     valid_at_str = case.get("valid_at")
     valid_at = datetime.fromisoformat(valid_at_str) if valid_at_str else None
     principal = case.get("principal", "engineering")
+    tenant_id = case.get("tenant_id", "eval-tenant")
 
     entity_seed = CanonicalEntity(
         entity_id=seed_id,
@@ -393,18 +435,34 @@ async def _evaluate_case(  # noqa: PLR0912
         attributes={},
     )
 
-    # Strategy 3: Graph at full depth (the "hybrid/graph-N" strategy)
-    evidence = await svc.retrieve_evidence(
+    # Strategy 1: Vector-only (pgvector similarity search using actual user question)
+    vector_found_names: list[str] = []
+    vector_chunks: list[dict[str, Any]] = []
+    if pg_conn is not None:
+        query_text = case["question"]
+        vector_chunks = await _vector_search_with_scores(
+            pg_conn, query_text, top_k=5, tenant_id=tenant_id
+        )
+        vector_found_names = [
+            r["content"]
+            for r in vector_chunks
+            if expected_object and expected_object in r["content"]
+        ]
+    vector_expected_found = expected_object in vector_found_names if expected_object else False
+    vector_recall = 1.0 if vector_expected_found else 0.0
+
+    # Strategy 2: Graph-only (Neo4j graph traversal at max_depth)
+    graph_evidence = await svc.retrieve_evidence(
         seed_entities=[entity_seed],
         predicates=[case.get("expected_predicate")] if case.get("expected_predicate") else None,
         valid_at=valid_at,
         max_depth=max_depth,
-        tenant_id=case.get("tenant_id", "eval-tenant"),
+        tenant_id=tenant_id,
         principal=principal,
     )
 
     found_object_names: list[str] = []
-    for ev in evidence:
+    for ev in graph_evidence:
         if ev.graph_path_fact_ids:
             last_fact_id = ev.graph_path_fact_ids[-1]
             obj_id = await _get_object_id_from_fact(repo, last_fact_id, seed_id)
@@ -417,37 +475,29 @@ async def _evaluate_case(  # noqa: PLR0912
     graph_recall = 1.0 if expected_found else 0.0
     graph_precision = 1.0 / len(found_object_names) if found_object_names else 0.0
 
-    # Strategy 1: Vector-only (pgvector similarity search)
-    vector_found_names: list[str] = []
-    if pg_conn is not None:
-        query_text = f"{seed_name} {case.get('expected_predicate', '')} {expected_object or ''}"
-        vector_results = await _vector_search(
-            pg_conn, query_text, top_k=5, tenant_id=case.get("tenant_id", "eval-tenant")
-        )
-        vector_found_names = [r for r in vector_results if expected_object and expected_object in r]
-    vector_expected_found = expected_object in vector_found_names if expected_object else False
-    vector_recall = 1.0 if vector_expected_found else 0.0
+    # Strategy 3: True Hybrid - combining vector + graph via RRF fusion
+    hybrid_found_names: list[str] = []
+    if pg_conn is not None and graph_evidence:
+        vector_results = [
+            _FakeRetrievedChunk(
+                chunk_id=r["chunk_id"],
+                source_id=r["chunk_id"],
+                document_id=None,
+                version_id=None,
+                content=r["content"],
+                vector_score=1.0,
+                keyword_score=None,
+                allowed_principals=[principal],
+            )
+            for r in vector_chunks
+        ]
+        fused_evidence = hybrid_rrf_fusion(vector_results, [], graph_evidence)
+        hybrid_found_names = [
+            ev.content for ev in fused_evidence if expected_object and expected_object in ev.content
+        ]
 
-    # Strategy 2: Graph at 1-hop (for comparison)
-    onehop_evidence = await svc.retrieve_evidence(
-        seed_entities=[entity_seed],
-        predicates=[case.get("expected_predicate")] if case.get("expected_predicate") else None,
-        valid_at=valid_at,
-        max_depth=1,
-        tenant_id=case.get("tenant_id", "eval-tenant"),
-        principal=principal,
-    )
-    onehop_names: list[str] = []
-    for ev in onehop_evidence:
-        if ev.graph_path_fact_ids:
-            last_fact_id = ev.graph_path_fact_ids[-1]
-            obj_id = await _get_object_id_from_fact(repo, last_fact_id, seed_id)
-            if obj_id:
-                obj_name = await _get_object_name(repo, obj_id)
-                if obj_name:
-                    onehop_names.append(obj_name)
-    onehop_expected_found = expected_object in onehop_names if expected_object else False
-    onehop_recall = 1.0 if onehop_expected_found else 0.0
+    hybrid_expected_found = expected_object in hybrid_found_names if expected_object else False
+    hybrid_recall = 1.0 if hybrid_expected_found else 0.0
 
     if graph_recall > vector_recall > 0:
         relative_improvement = (graph_recall - vector_recall) / vector_recall * 100
@@ -462,16 +512,16 @@ async def _evaluate_case(  # noqa: PLR0912
         "case_id": case["id"],
         "case_type": case["type"],
         "vector_recall": vector_recall,
-        "graph_1hop_recall": onehop_recall,
-        "graph_multihop_recall": graph_recall,
-        "graph_multihop_precision": graph_precision,
+        "graph_only_recall": graph_recall,
+        "hybrid_recall": hybrid_recall,
+        "graph_only_precision": graph_precision,
         "relative_improvement_pct": relative_improvement,
         "expected_object": expected_object,
         "vector_found": vector_found_names,
-        "graph_1hop_found": onehop_names,
-        "graph_multihop_found": found_object_names,
+        "graph_only_found": found_object_names,
+        "hybrid_found": hybrid_found_names,
         "expected_object_found": expected_found,
-        "num_graph_evidence": len(evidence),
+        "num_graph_evidence": len(graph_evidence),
     }
 
 
@@ -576,14 +626,10 @@ async def run_evaluation() -> dict[str, Any]:  # noqa: PLR0912, PLR0915
             results.append(result)
 
         vector_recalls = [r["vector_recall"] for r in results if r.get("vector_recall") is not None]
-        graph_1hop_recalls = [
-            r["graph_1hop_recall"] for r in results if r.get("graph_1hop_recall") is not None
+        graph_only_recalls = [
+            r["graph_only_recall"] for r in results if r.get("graph_only_recall") is not None
         ]
-        graph_multihop_recalls = [
-            r["graph_multihop_recall"]
-            for r in results
-            if r.get("graph_multihop_recall") is not None
-        ]
+        hybrid_recalls = [r["hybrid_recall"] for r in results if r.get("hybrid_recall") is not None]
         improvements = [
             r["relative_improvement_pct"]
             for r in results
@@ -591,14 +637,10 @@ async def run_evaluation() -> dict[str, Any]:  # noqa: PLR0912, PLR0915
         ]
 
         avg_vector_recall = sum(vector_recalls) / len(vector_recalls) if vector_recalls else 0.0
-        avg_1hop_recall = (
-            sum(graph_1hop_recalls) / len(graph_1hop_recalls) if graph_1hop_recalls else 0.0
+        avg_graph_only_recall = (
+            sum(graph_only_recalls) / len(graph_only_recalls) if graph_only_recalls else 0.0
         )
-        avg_multihop_recall = (
-            sum(graph_multihop_recalls) / len(graph_multihop_recalls)
-            if graph_multihop_recalls
-            else 0.0
-        )
+        avg_hybrid_recall = sum(hybrid_recalls) / len(hybrid_recalls) if hybrid_recalls else 0.0
         avg_improvement_pct = sum(improvements) / len(improvements) if improvements else 0.0
 
         multi_hop_cases = [r for r in results if "multi-hop" in r.get("case_type", "")]
@@ -606,40 +648,35 @@ async def run_evaluation() -> dict[str, Any]:  # noqa: PLR0912, PLR0915
             mh_vector = [
                 r["vector_recall"] for r in multi_hop_cases if r.get("vector_recall") is not None
             ]
-            mh_1hop = [
-                r["graph_1hop_recall"]
+            mh_graph_only = [
+                r["graph_only_recall"]
                 for r in multi_hop_cases
-                if r.get("graph_1hop_recall") is not None
-            ]
-            mh_multihop = [
-                r["graph_multihop_recall"]
-                for r in multi_hop_cases
-                if r.get("graph_multihop_recall") is not None
+                if r.get("graph_only_recall") is not None
             ]
             mh_avg_vector = sum(mh_vector) / len(mh_vector) if mh_vector else 0.0
-            mh_avg_1hop = sum(mh_1hop) / len(mh_1hop) if mh_1hop else 0.0
-            mh_avg_multihop = sum(mh_multihop) / len(mh_multihop) if mh_multihop else 0.0
+            mh_avg_graph_only = sum(mh_graph_only) / len(mh_graph_only) if mh_graph_only else 0.0
             if mh_avg_vector > 0:
-                mh_relative_improvement = ((mh_avg_multihop - mh_avg_vector) / mh_avg_vector) * 100
-            elif mh_avg_multihop > 0 and mh_avg_vector == 0:
+                mh_relative_improvement = (
+                    (mh_avg_graph_only - mh_avg_vector) / mh_avg_vector
+                ) * 100
+            elif mh_avg_graph_only > 0 and mh_avg_vector == 0:
                 mh_relative_improvement = None
             else:
                 mh_relative_improvement = 0.0
         else:
             mh_avg_vector = 0.0
-            mh_avg_1hop = 0.0  # noqa: F841
-            mh_avg_multihop = 0.0
+            mh_avg_graph_only = 0.0
             mh_relative_improvement = None
 
         return {
             "status": "completed",
             "dataset_version": dataset["version"],
-            "strategies_evaluated": ["vector_only", "graph_1hop", "graph_multihop"],
+            "strategies_evaluated": ["vector_only", "graph_only", "hybrid"],
             "total_cases": len(cases),
             "evaluated_cases": len([r for r in results if r.get("error") is None]),
             "avg_vector_recall": round(avg_vector_recall, 3),
-            "avg_graph_1hop_recall": round(avg_1hop_recall, 3),
-            "avg_graph_multihop_recall": round(avg_multihop_recall, 3),
+            "avg_graph_only_recall": round(avg_graph_only_recall, 3),
+            "avg_hybrid_recall": round(avg_hybrid_recall, 3),
             "relative_improvement_pct": round(avg_improvement_pct, 3)
             if avg_improvement_pct
             else None,

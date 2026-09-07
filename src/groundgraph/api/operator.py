@@ -472,26 +472,61 @@ async def submit_feedback(
     operator: Annotated[OperatorIdentity, Depends(_get_operator_identity)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> FeedbackResponse:
-    """Submit user feedback for an execution run."""
+    """Submit user feedback for an execution run.
+
+    Verifies tenant ownership before creating feedback: the execution run
+    must belong to the operator's tenant (unless operator is global).
+    """
+    run_not_found = False
+    cross_tenant = False
+    feedback_id: UUID | None = None
+    created_at: datetime | None = None
     try:
         session_factory = get_session_factory()
         async with session_factory() as session:
-            record = UserFeedback(
-                run_id=feedback.execution_run_id,
-                vote=feedback.vote,
-                category=feedback.category,
-                notes=feedback.notes,
-                correction=feedback.correction,
+            run_result = await session.execute(
+                select(ExecutionRun.tenant_id).where(
+                    ExecutionRun.run_id == feedback.execution_run_id
+                )
             )
-            session.add(record)
-            await session.commit()
-            feedback_id = record.feedback_id
-            created_at = record.created_at
+            run_row = run_result.scalar_one_or_none()
+            if run_row is None:
+                run_not_found = True
+            elif not operator.is_global and run_row != operator.tenant_id:
+                cross_tenant = True
+            else:
+                record = UserFeedback(
+                    run_id=feedback.execution_run_id,
+                    vote=feedback.vote,
+                    category=feedback.category,
+                    notes=feedback.notes,
+                    correction=feedback.correction,
+                )
+                session.add(record)
+                await session.commit()
+                feedback_id = record.feedback_id
+                created_at = record.created_at
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to record feedback: {exc}",
         ) from exc
+
+    if run_not_found:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Execution run {feedback.execution_run_id} not found",
+        )
+    if cross_tenant:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cannot submit feedback for execution runs from other tenants",
+        )
+
+    assert feedback_id is not None
+    assert created_at is not None
 
     return FeedbackResponse(
         feedback_id=feedback_id,
@@ -506,31 +541,60 @@ async def submit_review_decision(
     operator: Annotated[OperatorIdentity, Depends(_get_operator_identity)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> ReviewDecisionResponse:
-    """Submit a decision for a review queue item."""
+    """Submit a decision for a review queue item.
+
+    Verifies tenant ownership before updating: the review item's execution run
+    must belong to the operator's tenant (unless operator is global).
+    """
     not_found = False
+    cross_tenant = False
     resolved_at: datetime | None = None
     try:
         session_factory = get_session_factory()
         async with session_factory() as session:
-            stmt = (
-                update(HumanReviewItem)
+            row_result = await session.execute(
+                select(HumanReviewItem, ExecutionRun.tenant_id.label("run_tenant_id"))
+                .join(
+                    ExecutionRun,
+                    ExecutionRun.run_id == HumanReviewItem.run_id,
+                    isouter=True,
+                )
                 .where(HumanReviewItem.review_id == decision.review_id)
-                .values(
-                    decision=decision.decision,
-                    decided_by=operator.operator_id,
-                    decided_at=datetime.now(UTC),
-                )
             )
-            await session.execute(stmt)
-            await session.commit()
-            result = await session.execute(
-                select(HumanReviewItem.decided_at).where(
-                    HumanReviewItem.review_id == decision.review_id
-                )
-            )
-            row = result.scalar_one_or_none()
-            not_found = row is None
-            resolved_at = datetime.now(UTC) if not_found else row
+            row = row_result.one_or_none()
+            if row is None:
+                not_found = True
+            else:
+                review_item, run_tenant_id = row
+                tenant_id = run_tenant_id or getattr(review_item, "tenant_id", None)
+                if (tenant_id is None and not operator.is_global) or (
+                    not operator.is_global
+                    and tenant_id is not None
+                    and tenant_id != operator.tenant_id
+                ):
+                    cross_tenant = True
+                else:
+                    stmt = (
+                        update(HumanReviewItem)
+                        .where(HumanReviewItem.review_id == decision.review_id)
+                        .values(
+                            decision=decision.decision,
+                            decided_by=operator.operator_id,
+                            decided_at=datetime.now(UTC),
+                        )
+                    )
+                    await session.execute(stmt)
+                    await session.commit()
+                    result = await session.execute(
+                        select(HumanReviewItem.decided_at).where(
+                            HumanReviewItem.review_id == decision.review_id
+                        )
+                    )
+                    resolved_row = result.scalar_one_or_none()
+                    not_found = resolved_row is None
+                    resolved_at = datetime.now(UTC) if not_found else resolved_row
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -542,8 +606,12 @@ async def submit_review_decision(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Review item {decision.review_id} not found",
         )
+    if cross_tenant:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cannot modify reviews from other tenants",
+        )
 
-    # mypy/pyright narrow here; for extra safety:
     assert resolved_at is not None
 
     return ReviewDecisionResponse(
@@ -707,6 +775,7 @@ async def transition_proposal(  # noqa: PLR0912, PLR0915
     proposal_not_found = False
     not_owner = False
     invalid_transition = False
+    missing_guard = False
     transition_error_msg = ""
     current_status = ""
 
@@ -731,21 +800,46 @@ async def transition_proposal(  # noqa: PLR0912, PLR0915
 
             if not proposal_not_found and not not_owner and not invalid_transition:
                 assert record is not None
-                record.status = request.target_status
-                if request.target_status == "EVALUATED" and request.eval_run_id:
-                    record.eval_run_id = request.eval_run_id
-                if request.target_status == "EVALUATED" and request.eval_result:
-                    record.eval_result = request.eval_result
-                if request.target_status == "APPROVED":
-                    record.approver = operator.operator_id
-                    record.approved_at = datetime.now(UTC)
-                if request.target_status == "CANARY" and request.canary_result:
-                    record.canary_result = request.canary_result
-                if request.target_status == "PROMOTED" and request.deployment_result:
-                    record.deployment_result = request.deployment_result
-                if request.target_status == "ROLLED_BACK":
+                if request.target_status == "EVALUATED":
+                    if not request.eval_run_id or not request.eval_result:
+                        missing_guard = True
+                        transition_error_msg = (
+                            "Cannot transition to EVALUATED without both "
+                            "eval_run_id and eval_result"
+                        )
+                    else:
+                        record.eval_run_id = request.eval_run_id
+                        record.eval_result = request.eval_result
+                        record.status = request.target_status
+                elif request.target_status == "APPROVED":
+                    if not request.eval_result:
+                        missing_guard = True
+                        transition_error_msg = "Cannot transition to APPROVED without eval_result"
+                    else:
+                        record.approver = operator.operator_id
+                        record.approved_at = datetime.now(UTC)
+                        record.status = request.target_status
+                elif request.target_status == "CANARY":
+                    if current_status != "APPROVED":
+                        missing_guard = True
+                        transition_error_msg = "Canary requires prior approval"
+                    else:
+                        record.status = request.target_status
+                elif request.target_status == "PROMOTED":
+                    if not request.deployment_result:
+                        missing_guard = True
+                        transition_error_msg = (
+                            "Cannot transition to PROMOTED without deployment_result"
+                        )
+                    else:
+                        record.deployment_result = request.deployment_result
+                        record.status = request.target_status
+                elif request.target_status == "ROLLED_BACK":
                     record.rolled_back_at = datetime.now(UTC)
                     record.rollback_reason = request.rollback_reason
+                    record.status = request.target_status
+                else:
+                    record.status = request.target_status
 
                 await session.commit()
                 await session.refresh(record)
@@ -768,6 +862,11 @@ async def transition_proposal(  # noqa: PLR0912, PLR0915
             detail="Cannot modify proposals from other tenants",
         )
     if invalid_transition:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=transition_error_msg,
+        )
+    if missing_guard:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=transition_error_msg,

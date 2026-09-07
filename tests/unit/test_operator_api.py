@@ -57,14 +57,24 @@ class _MockAsyncSession:
         from datetime import UTC, datetime
 
         self._add_calls = []
+        self._tenant_id: str | None = None
+        self._feedback_record: Any = None
 
         def mock_add(obj: Any) -> None:
             obj.feedback_id = uuid4()
             obj.created_at = datetime.now(UTC)
+            self._feedback_record = obj
 
-        self.add = mock_add
-        self.commit = AsyncMock()
-        self.flush = AsyncMock()
+        if not hasattr(self, "add") or not callable(self.add):
+            self.add = mock_add
+        if not hasattr(self, "commit") or not callable(self.commit):
+            self.commit = AsyncMock()
+        if not hasattr(self, "flush") or not callable(self.flush):
+            self.flush = AsyncMock()
+        if not hasattr(self, "execute") or not callable(self.execute):
+            self.execute = AsyncMock()
+        if not hasattr(self, "scalar_one_or_none") or not callable(self.scalar_one_or_none):
+            self.scalar_one_or_none = AsyncMock()
         return self
 
     async def __aexit__(self, *args: Any) -> None:
@@ -74,6 +84,27 @@ class _MockAsyncSession:
 class _MockSessionFactory:
     def __call__(self) -> _MockAsyncSession:
         return _MockAsyncSession()
+
+
+class _MockFeedbackSessionFactory:
+    """Factory that returns a session that finds the given tenant_id."""
+
+    def __init__(self, tenant_id: str) -> None:
+        self._tenant_id = tenant_id
+
+    def __call__(self) -> _MockAsyncSession:
+        session = _MockAsyncSession()
+        session._tenant_id = self._tenant_id
+
+        async def mock_execute(stmt: Any) -> Any:
+            return session
+
+        def mock_scalar_one_or_none() -> str | None:
+            return session._tenant_id
+
+        session.execute = mock_execute
+        session.scalar_one_or_none = mock_scalar_one_or_none
+        return session
 
 
 @pytest.fixture
