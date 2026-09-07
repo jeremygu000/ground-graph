@@ -73,6 +73,19 @@ class _Result:
         return self._row
 
 
+class _MultiResult:
+    def __init__(self, row: object | None = None, rows: list[object] | None = None) -> None:
+        self._row = row
+        self._rows = rows or []
+        self._calls = 0
+
+    def scalars(self) -> _Result:
+        return _Result(rows=self._rows)
+
+    def scalar_one_or_none(self) -> object | None:
+        return self._row
+
+
 class _Session:
     def __init__(self) -> None:
         self.added: list[object] = []
@@ -216,3 +229,83 @@ async def test_update_step_status_uses_atomic_where_clause() -> None:
 
     assert session.last_statement is not None
     assert "status =" in str(session.last_statement)
+
+
+@pytest.mark.asyncio
+async def test_get_steps_for_run() -> None:
+    session = _Session()
+    repo = ExecutionRepository(cast(PostgresSession, session))
+    run_id = uuid4()
+    step1_id = uuid4()
+    step2_id = uuid4()
+    now = datetime.now(UTC)
+    session.execute_result = _MultiResult(
+        rows=[
+            _StepRow(
+                step_id=step1_id,
+                run_id=run_id,
+                name="plan",
+                status=ExecutionStepStatus.SUCCEEDED.value,
+                attempt=1,
+                depends_on=[],
+                input={},
+                output={"result": "step1"},
+                started_at=now,
+                finished_at=now,
+            ),
+            _StepRow(
+                step_id=step2_id,
+                run_id=run_id,
+                name="execute",
+                status=ExecutionStepStatus.SUCCEEDED.value,
+                attempt=1,
+                depends_on=[step1_id],
+                input={},
+                output={"result": "step2"},
+                started_at=now,
+                finished_at=now,
+            ),
+        ]
+    )
+
+    steps = await repo.get_steps_for_run(run_id)
+    assert len(steps) == 2
+    assert steps[0].name == "plan"
+    assert steps[1].name == "execute"
+
+
+@pytest.mark.asyncio
+async def test_reconstruct_dag() -> None:
+    session = _Session()
+    repo = ExecutionRepository(cast(PostgresSession, session))
+    run_id = uuid4()
+    now = datetime.now(UTC)
+    session.execute_result = _MultiResult(
+        row=_RunRow(
+            run_id=run_id,
+            workflow="query",
+            status=ExecutionRunStatus.SUCCEEDED.value,
+            principal="user1",
+            tenant_id="tenant-a",
+            input={"question": "What?"},
+            output={"answer": "This."},
+            started_at=now,
+            finished_at=now,
+        ),
+        rows=[
+            _StepRow(
+                step_id=uuid4(),
+                run_id=run_id,
+                name="plan",
+                status=ExecutionStepStatus.SUCCEEDED.value,
+                attempt=1,
+                depends_on=[],
+                input={},
+                output={},
+            )
+        ],
+    )
+
+    run, _ = await repo.reconstruct_dag(run_id)
+    assert run.run_id == run_id
+    assert run.workflow == "query"

@@ -4,19 +4,22 @@ from __future__ import annotations
 
 import logging
 import secrets
+from datetime import UTC, datetime
 from typing import Annotated
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
 from groundgraph.api.dependencies import (
     Identity,
+    get_execution_repo_with_session,
     get_identity,
     get_query_workflow,
     get_retrieval_service,
 )
 from groundgraph.application.retrieval.retrieval_service import RetrievalService
+from groundgraph.domain.execution import ExecutionRun, ExecutionRunStatus
 from groundgraph.domain.retrieval import QueryResponse
 from groundgraph.workflows.query_graph import QueryWorkflow
 
@@ -203,14 +206,34 @@ async def query_v1(
     workflow: Annotated[QueryWorkflow, Depends(get_query_workflow)],
     identity: Annotated[Identity, Depends(get_identity)],
     http_request: Request,
+    repo: Annotated[object, Depends(get_execution_repo_with_session)],
 ) -> VectorQueryResponse:
     """Execute a hybrid GraphRAG query using trusted identity from request context.
 
     This is the M7 stable endpoint. tenant_id and principal are extracted from
     trusted request identity (X-Tenant-ID / X-Principal headers set by gateway),
     NOT from client-supplied body fields.
+
+    Execution runs are persisted for audit and replay.
     """
     request_id = http_request.headers.get("x-request-id", f"req-{secrets.token_hex(12)}")
+
+    run_input: dict[str, object] = {"question": request.question}
+    if request.index_name:
+        run_input["index_name"] = request.index_name
+
+    run = ExecutionRun(
+        run_id=uuid4(),
+        workflow="query",
+        status=ExecutionRunStatus.PENDING,
+        principal=identity.principal,
+        tenant_id=identity.tenant_id,
+        input=run_input,
+        output={},
+        started_at=datetime.now(UTC),
+    )
+    await repo.create_run(run)  # type: ignore[attr-defined]
+
     result: QueryResponse | None = None
     try:
         result = await workflow.ainvoke(
@@ -219,7 +242,19 @@ async def query_v1(
             tenant_id=identity.tenant_id,
             index_name=request.index_name,
         )
+        await repo.update_run_status(  # type: ignore[attr-defined]
+            run_id=run.run_id,
+            expected_status=ExecutionRunStatus.PENDING,
+            new_status=ExecutionRunStatus.SUCCEEDED,
+        )
     except Exception as exc:
+        await repo.update_run_status(  # type: ignore[attr-defined]
+            run_id=run.run_id,
+            expected_status=ExecutionRunStatus.PENDING,
+            new_status=ExecutionRunStatus.FAILED,
+            error_code="WORKFLOW_FAILED",
+            error_message=str(exc),
+        )
         _handle_error(exc, request_id)
 
     assert result is not None
@@ -247,6 +282,6 @@ async def query_v1(
             for cit in result.citations
         ],
         confidence_band=result.confidence_band,
-        execution_run_id=result.execution_run_id,
+        execution_run_id=run.run_id,
         warnings=result.warnings,
     )

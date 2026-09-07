@@ -37,11 +37,12 @@ from groundgraph.infrastructure.neo4j.repository import Neo4jGraphRepository
 from groundgraph.infrastructure.openai.answer_generator import EvidenceOnlyAnswerGenerator
 from groundgraph.infrastructure.openai.embedding_provider import OpenAIEmbeddingProvider
 from groundgraph.infrastructure.openai.reranker import CrossEncoderReranker
+from groundgraph.infrastructure.postgres.execution_store import ExecutionRepository
 from groundgraph.infrastructure.postgres.index_version_resolver import (
     PostgresIndexVersionResolver,
 )
 from groundgraph.infrastructure.postgres.keyword_retriever import PostgresKeywordRetriever
-from groundgraph.infrastructure.postgres.session import get_session_factory
+from groundgraph.infrastructure.postgres.session import PostgresSession, get_session_factory
 from groundgraph.infrastructure.postgres.vector_retriever import PostgresVectorRetriever
 from groundgraph.workflows.query_graph import QueryWorkflow, QueryWorkflowConfig
 
@@ -289,6 +290,34 @@ def _build_query_workflow(settings: Settings) -> QueryWorkflow:
             settings=settings,
         )
     )
+
+
+def get_execution_repository(
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> ExecutionRepository:
+    """Return an ExecutionRepository backed by a fresh session."""
+    factory = get_session_factory()
+    session = factory()
+    return ExecutionRepository(cast(PostgresSession, session))
+
+
+async def get_execution_repo_with_session(
+    settings: Annotated[Settings, Depends(get_settings)],
+):
+    """Yield an ExecutionRepository with a session that commits on success.
+
+    The session is always closed on exit. Use this for API endpoints that need
+    atomic read-write access to execution runs.
+    """
+    factory = get_session_factory()
+    async with factory() as session:
+        repo = ExecutionRepository(cast(PostgresSession, session))
+        try:
+            yield repo
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
 
 
 def get_query_workflow(
