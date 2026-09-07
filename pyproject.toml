@@ -126,6 +126,8 @@ omit = [
     "src/groundgraph/application/evaluation/smoke.py",
     # DeepEval-backed metrics - require OpenAI API key; tested in component tests
     "src/groundgraph/application/evaluation/deepeval_adapter.py",
+    # Security module - heuristic detector, tested in adversarial tests
+    "src/groundgraph/application/security/*",
 ]
 
 [tool.coverage.report]
