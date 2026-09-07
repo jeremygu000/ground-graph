@@ -1,0 +1,181 @@
+# Kubernetes manifests for GroundGraph production deployment.
+# Namespace: groundgraph
+# Usage: kubectl apply -f deploy/kubernetes/
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: groundgraph
+  labels:
+    app.kubernetes.io/name: groundgraph
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: groundgraph-secrets
+  namespace: groundgraph
+type: Opaque
+stringData:
+  postgres-password: ${POSTGRES_PASSWORD}
+  neo4j-password: ${NEO4J_PASSWORD}
+  s3-access-key: ${S3_ACCESS_KEY}
+  s3-secret-key: ${S3_SECRET_KEY}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: groundgraph-config
+  namespace: groundgraph
+data:
+  APP_ENV: "production"
+  LOG_LEVEL: "INFO"
+  AUTH_MODE: "jwt"
+  NEO4J_URI: "bolt://neo4j:7687"
+  S3_ENDPOINT_URL: "http://minio:9000"
+  OTEL_SERVICE_NAME: "groundgraph-api"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: groundgraph-api
+  namespace: groundgraph
+  labels:
+    app: groundgraph-api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: groundgraph-api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: groundgraph-api
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+        - name: api
+          image: groundgraph/api:${IMAGE_TAG:-latest}
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: groundgraph-config
+            - secretRef:
+                name: groundgraph-secrets
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "2Gi"
+              cpu: "1000m"
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "5"]
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app: groundgraph-api
+                topologyKey: kubernetes.io/hostname
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: groundgraph-api
+  namespace: groundgraph
+spec:
+  type: ClusterIP
+  ports:
+    - port: 80
+      targetPort: 8000
+  selector:
+    app: groundgraph-api
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: groundgraph-api
+  namespace: groundgraph
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: groundgraph-api
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: groundgraph-api
+  namespace: groundgraph
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  tls:
+    - hosts:
+        - api.groundgraph.example.com
+      secretName: groundgraph-tls
+  rules:
+    - host: api.groundgraph.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: groundgraph-api
+                port:
+                  number: 80
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: groundgraph-api
+  namespace: groundgraph
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: groundgraph-api

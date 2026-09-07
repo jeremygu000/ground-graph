@@ -128,6 +128,8 @@ omit = [
     "src/groundgraph/application/evaluation/deepeval_adapter.py",
     # Security module - heuristic detector, tested in adversarial tests
     "src/groundgraph/application/security/*",
+    # Operational scripts - tested manually; not unit-testable without Docker
+    "scripts/",
 ]
 
 [tool.coverage.report]
