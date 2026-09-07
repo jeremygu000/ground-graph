@@ -68,6 +68,7 @@ class StackServices:
     grafana_host: str = "127.0.0.1"
     grafana_port: int = 3001
     api_base_url: str = "http://127.0.0.1:8000"
+    compose_env: dict[str, str] = field(default_factory=dict, repr=False)
 
     health_check_urls: dict[str, str] = field(default_factory=dict)
 
@@ -220,53 +221,54 @@ def docker_stack() -> Generator[StackServices, None, None]:
             f"stderr: {docker_info.stderr}"
         )
 
-    used_ports: set[int] = set()
-    postgres_port = _pick_unique_free_port(used_ports)
-    neo4j_http_port = _pick_unique_free_port(used_ports)
-    neo4j_bolt_port = _pick_unique_free_port(used_ports)
-    minio_port = _pick_unique_free_port(used_ports)
-    minio_console_port = _pick_unique_free_port(used_ports)
-    otel_grpc_port = _pick_unique_free_port(used_ports)
-    otel_http_port = _pick_unique_free_port(used_ports)
-    otel_health_port = _pick_unique_free_port(used_ports)
-    otel_internal_metrics_port = _pick_unique_free_port(used_ports)
-    otel_app_metrics_port = _pick_unique_free_port(used_ports)
-    phoenix_port = _pick_unique_free_port(used_ports)
-    phoenix_prometheus_port = _pick_unique_free_port(used_ports)
-    prometheus_port = _pick_unique_free_port(used_ports)
-    grafana_port = _pick_unique_free_port(used_ports)
+    compose_env: dict[str, str] = {}
+    stack: StackServices | None = None
+    compose_up: subprocess.CompletedProcess[str] | None = None
+    for _ in range(3):
+        used_ports: set[int] = set()
+        ports = [_pick_unique_free_port(used_ports) for _ in range(14)]
+        compose_env = dict(
+            zip(
+                (
+                    "POSTGRES_PORT",
+                    "NEO4J_HTTP_PORT",
+                    "NEO4J_BOLT_PORT",
+                    "MINIO_PORT",
+                    "MINIO_CONSOLE_PORT",
+                    "OTEL_GRPC_PORT",
+                    "OTEL_HTTP_PORT",
+                    "OTEL_HEALTH_PORT",
+                    "OTEL_INTERNAL_METRICS_PORT",
+                    "OTEL_APP_METRICS_PORT",
+                    "PHOENIX_PORT",
+                    "PHOENIX_PROMETHEUS_PORT",
+                    "PROMETHEUS_PORT",
+                    "GRAFANA_PORT",
+                ),
+                map(str, ports),
+                strict=True,
+            )
+        )
+        compose_up = _run_compose(["up", "-d"], timeout=120, env=compose_env)
+        if compose_up.returncode == 0:
+            stack = StackServices(
+                postgres_port=ports[0],
+                neo4j_port=ports[2],
+                minio_port=ports[3],
+                otel_collector_port=ports[5],
+                phoenix_port=ports[10],
+                prometheus_port=ports[12],
+                grafana_port=ports[13],
+                compose_env=compose_env.copy(),
+            )
+            break
+        _run_compose(["down", "--remove-orphans"], timeout=60, env=compose_env)
 
-    compose_env = {
-        "POSTGRES_PORT": str(postgres_port),
-        "NEO4J_HTTP_PORT": str(neo4j_http_port),
-        "NEO4J_BOLT_PORT": str(neo4j_bolt_port),
-        "MINIO_PORT": str(minio_port),
-        "MINIO_CONSOLE_PORT": str(minio_console_port),
-        "OTEL_GRPC_PORT": str(otel_grpc_port),
-        "OTEL_HTTP_PORT": str(otel_http_port),
-        "OTEL_HEALTH_PORT": str(otel_health_port),
-        "OTEL_INTERNAL_METRICS_PORT": str(otel_internal_metrics_port),
-        "OTEL_APP_METRICS_PORT": str(otel_app_metrics_port),
-        "PHOENIX_PORT": str(phoenix_port),
-        "PHOENIX_PROMETHEUS_PORT": str(phoenix_prometheus_port),
-        "PROMETHEUS_PORT": str(prometheus_port),
-        "GRAFANA_PORT": str(grafana_port),
-    }
-
-    stack = StackServices(
-        postgres_port=postgres_port,
-        neo4j_port=neo4j_bolt_port,
-        minio_port=minio_port,
-        otel_collector_port=otel_grpc_port,
-        phoenix_port=phoenix_port,
-        prometheus_port=prometheus_port,
-        grafana_port=grafana_port,
-    )
-
-    compose_up = _run_compose(["up", "-d"], timeout=120, env=compose_env)
-    if compose_up.returncode != 0:
+    if compose_up is None or stack is None:
         pytest.fail(
-            f"docker compose up failed:\nstdout: {compose_up.stdout}\nstderr: {compose_up.stderr}"
+            "docker compose up failed after 3 port-allocation attempts:\n"
+            f"stdout: {compose_up.stdout if compose_up else ''}\n"
+            f"stderr: {compose_up.stderr if compose_up else ''}"
         )
 
     try:

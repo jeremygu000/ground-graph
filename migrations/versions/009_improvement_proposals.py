@@ -15,6 +15,7 @@ from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy.dialects.postgresql import JSONB
 
 revision: str = "009_improvement_proposals"
 down_revision: str | None = "008_user_feedback_metadata"
@@ -34,14 +35,14 @@ def upgrade() -> None:
             nullable=False,
             server_default="PROPOSED",
         ),
-        sa.Column("baseline_config", sa.JSONB(), nullable=False, server_default="{}"),
-        sa.Column("proposal_config", sa.JSONB(), nullable=False, server_default="{}"),
+        sa.Column("baseline_config", JSONB(), nullable=False, server_default="{}"),
+        sa.Column("proposal_config", JSONB(), nullable=False, server_default="{}"),
         sa.Column("eval_run_id", sa.UUID(), nullable=True),
-        sa.Column("eval_result", sa.JSONB(), nullable=True),
+        sa.Column("eval_result", JSONB(), nullable=True),
         sa.Column("approver", sa.String(length=255), nullable=True),
         sa.Column("approved_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("canary_result", sa.JSONB(), nullable=True),
-        sa.Column("deployment_result", sa.JSONB(), nullable=True),
+        sa.Column("canary_result", JSONB(), nullable=True),
+        sa.Column("deployment_result", JSONB(), nullable=True),
         sa.Column("rolled_back_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("rollback_reason", sa.Text(), nullable=True),
         sa.Column(
@@ -70,7 +71,8 @@ def upgrade() -> None:
         "improvement_proposals",
         ["eval_run_id"],
     )
-    op.add_foreign_key_constraint(
+    op.create_foreign_key(
+        "fk_improvement_proposals_eval_run_id_evaluation_runs",
         "improvement_proposals",
         "evaluation_runs",
         ["eval_run_id"],

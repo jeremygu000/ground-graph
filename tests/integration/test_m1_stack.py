@@ -26,9 +26,19 @@ OTEL_EXPORT_INTERVAL_SEC = 60.0
 PROMETHEUS_SCRAPE_INTERVAL_SEC = 15.0
 
 
-def _run_compose(args: list[str], timeout: int = 30) -> subprocess.CompletedProcess[str]:
+def _run_compose(
+    args: list[str],
+    timeout: int = 30,
+    *,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
     cmd = ["docker", "compose", "-f", "docker-compose.yml", *args]
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
+    process_env = os.environ.copy()
+    if env is not None:
+        process_env.update(env)
+    return subprocess.run(
+        cmd, capture_output=True, text=True, timeout=timeout, check=False, env=process_env
+    )
 
 
 async def _poll_url(url: str, timeout_sec: float = 30.0, expected_status: int = 200) -> bool:
@@ -676,13 +686,22 @@ class TestDestructivePostgresRecovery:
             text=True,
             timeout=10,
             check=False,
+            env={**os.environ, **docker_stack.compose_env},
         )
         container_id = ps.stdout.strip().splitlines()[0] if ps.stdout.strip() else ""
         assert container_id, (
             "could not resolve postgres container id via 'docker compose ps -q postgres'"
         )
 
-        _run_compose(["stop", "postgres"], timeout=15)
+        stopped = await asyncio.to_thread(
+            subprocess.run,
+            ["docker", "stop", container_id],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+        assert stopped.returncode == 0, f"could not stop postgres: {stopped.stderr}"
         try:
             degraded = False
             r: httpx.Response | None = None
@@ -701,7 +720,15 @@ class TestDestructivePostgresRecovery:
             assert pg is not None, "postgres should appear in dependency list"
             assert pg["healthy"] is False, "postgres should be marked unhealthy"
         finally:
-            _run_compose(["start", "postgres"], timeout=30)
+            started = await asyncio.to_thread(
+                subprocess.run,
+                ["docker", "start", container_id],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+            assert started.returncode == 0, f"could not restart postgres: {started.stderr}"
             # 1) Container reports healthy.
             recovered_container = False
             for _ in range(30):
@@ -730,17 +757,24 @@ class TestDestructivePostgresRecovery:
             # Phoenix/Postgres connection pool recovered end-to-end, not
             # just the container itself.
             recovered_app = False
+            last_recovery_response: httpx.Response | None = None
             for _ in range(30):
                 async with httpx.AsyncClient() as client:
                     r = await client.get(
                         f"{docker_stack.api_base_url}/health/ready",
                         timeout=5.0,
                     )
+                last_recovery_response = r
                 if r.status_code == 200:
                     recovered_app = True
                     break
                 await asyncio.sleep(1.0)
+            response_detail = (
+                last_recovery_response.text
+                if last_recovery_response is not None
+                else "no response received"
+            )
             assert recovered_app, (
                 "app /health/ready did not return 200 within 30s after postgres restart; "
-                "Phoenix/postgres connection pool may still be recovering"
+                f"last response: {response_detail}"
             )
