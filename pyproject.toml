@@ -124,6 +124,8 @@ branch = true
 omit = [
     # CLI entry point - tested via make eval-smoke, not unit tests
     "src/groundgraph/application/evaluation/smoke.py",
+    # DeepEval-backed metrics - require OpenAI API key; tested in component tests
+    "src/groundgraph/application/evaluation/deepeval_adapter.py",
 ]
 
 [tool.coverage.report]

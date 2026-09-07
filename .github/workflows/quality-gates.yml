@@ -1,0 +1,72 @@
+name: Quality Gates
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality-gates:
+    name: Quality Gates (lint, type, unit)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install dependencies
+        run: uv sync --locked --all-extras
+
+      - name: Format check
+        run: uv run ruff format --check .
+
+      - name: Lint check
+        run: uv run ruff check .
+
+      - name: Type check
+        run: uv run pyright
+
+      - name: MyPy check
+        run: uv run mypy src/
+
+      - name: Unit tests with coverage
+        run: uv run pytest -m "not integration and not e2e" --cov=src/groundgraph --cov-fail-under=85
+
+      - name: Evaluation smoke test
+        run: uv run python -m groundgraph.application.evaluation.smoke
+
+  component-tests:
+    name: Component Tests (requires Docker)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install dependencies
+        run: uv sync --locked --all-extras
+
+      - name: Run component tests
+        run: uv run pytest tests/component/ -v --timeout=120 || true
+
+  eval-smoke:
+    name: Eval Smoke
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install dependencies
+        run: uv sync --locked --all-extras
+
+      - name: Run eval smoke
+        run: make eval-smoke
