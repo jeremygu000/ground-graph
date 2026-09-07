@@ -10,7 +10,7 @@ Operator identity is extracted from the Authorization: Bearer token.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
@@ -29,6 +29,7 @@ from groundgraph.infrastructure.postgres.models import (
     EvaluationRun,
     ExecutionRun,
     HumanReviewItem,
+    ImprovementProposal,
     Source,
     UserFeedback,
 )
@@ -550,4 +551,243 @@ async def submit_review_decision(
         decision=decision.decision,
         decided_by=operator.operator_id,
         decided_at=resolved_at,
+    )
+
+
+PROPOSAL_STATES = {"PROPOSED", "EVALUATED", "APPROVED", "CANARY", "PROMOTED", "ROLLED_BACK"}
+VALID_TRANSITIONS = {
+    "PROPOSED": {"EVALUATED"},
+    "EVALUATED": {"APPROVED"},
+    "APPROVED": {"CANARY"},
+    "CANARY": {"PROMOTED", "ROLLED_BACK"},
+    "PROMOTED": set(),
+    "ROLLED_BACK": set(),
+}
+
+
+class ProposalSubmission(BaseModel):
+    failure_cluster_id: str | None = None
+    baseline_config: dict[str, Any] = Field(default_factory=dict)
+    proposal_config: dict[str, Any] = Field(default_factory=dict)
+
+
+class ProposalResponse(BaseModel):
+    proposal_id: UUID
+    tenant_id: str
+    failure_cluster_id: str | None = None
+    status: str
+    baseline_config: dict[str, Any]
+    proposal_config: dict[str, Any]
+    eval_run_id: UUID | None = None
+    eval_result: dict[str, Any] | None = None
+    approver: str | None = None
+    approved_at: datetime | None = None
+    canary_result: dict[str, Any] | None = None
+    deployment_result: dict[str, Any] | None = None
+    rolled_back_at: datetime | None = None
+    rollback_reason: str | None = None
+    created_at: datetime
+
+
+class ProposalTransitionRequest(BaseModel):
+    target_status: str
+    notes: str | None = None
+    eval_run_id: UUID | None = None
+    eval_result: dict[str, Any] | None = None
+    canary_result: dict[str, Any] | None = None
+    deployment_result: dict[str, Any] | None = None
+    rollback_reason: str | None = None
+
+
+@router.get("/proposals", response_model=list[ProposalResponse])
+async def list_proposals(
+    operator: Annotated[OperatorIdentity, Depends(_get_operator_identity)],
+    status_filter: str | None = Query(None, alias="status"),
+    limit: int = Query(50, ge=1, le=200),
+) -> list[ProposalResponse]:
+    """List improvement proposals for the operator's tenant (or all if global)."""
+    try:
+        session_factory = get_session_factory()
+        async with session_factory() as session:
+            conditions = (
+                [] if operator.is_global else [ImprovementProposal.tenant_id == operator.tenant_id]
+            )
+            if status_filter:
+                conditions.append(ImprovementProposal.status == status_filter)
+            stmt = (
+                select(ImprovementProposal)
+                .where(*conditions)
+                .order_by(ImprovementProposal.created_at.desc())
+                .limit(limit)
+            )
+            result = await session.execute(stmt)
+            proposals = result.scalars().all()
+    except Exception:
+        proposals = []
+
+    return [
+        ProposalResponse(
+            proposal_id=p.proposal_id,
+            tenant_id=p.tenant_id,
+            failure_cluster_id=p.failure_cluster_id,
+            status=p.status,
+            baseline_config=p.baseline_config,
+            proposal_config=p.proposal_config,
+            eval_run_id=p.eval_run_id,
+            eval_result=p.eval_result,
+            approver=p.approver,
+            approved_at=p.approved_at,
+            canary_result=p.canary_result,
+            deployment_result=p.deployment_result,
+            rolled_back_at=p.rolled_back_at,
+            rollback_reason=p.rollback_reason,
+            created_at=p.created_at,
+        )
+        for p in proposals
+    ]
+
+
+@router.post("/proposals", response_model=ProposalResponse, status_code=status.HTTP_201_CREATED)
+async def create_proposal(
+    proposal: ProposalSubmission,
+    operator: Annotated[OperatorIdentity, Depends(_get_operator_identity)],
+) -> ProposalResponse:
+    """Create a new improvement proposal."""
+    record = ImprovementProposal(
+        tenant_id=operator.tenant_id,
+        failure_cluster_id=proposal.failure_cluster_id,
+        status="PROPOSED",
+        baseline_config=proposal.baseline_config,
+        proposal_config=proposal.proposal_config,
+    )
+    try:
+        session_factory = get_session_factory()
+        async with session_factory() as session:
+            session.add(record)
+            await session.commit()
+            await session.refresh(record)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create proposal: {exc}",
+        ) from exc
+
+    return ProposalResponse(
+        proposal_id=record.proposal_id,
+        tenant_id=record.tenant_id,
+        failure_cluster_id=record.failure_cluster_id,
+        status=record.status,
+        baseline_config=record.baseline_config,
+        proposal_config=record.proposal_config,
+        eval_run_id=record.eval_run_id,
+        eval_result=record.eval_result,
+        approver=record.approver,
+        approved_at=record.approved_at,
+        canary_result=record.canary_result,
+        deployment_result=record.deployment_result,
+        rolled_back_at=record.rolled_back_at,
+        rollback_reason=record.rollback_reason,
+        created_at=record.created_at,
+    )
+
+
+@router.post("/proposals/{proposal_id}/transition", response_model=ProposalResponse)
+async def transition_proposal(  # noqa: PLR0912, PLR0915
+    proposal_id: UUID,
+    request: ProposalTransitionRequest,
+    operator: Annotated[OperatorIdentity, Depends(_get_operator_identity)],
+) -> ProposalResponse:
+    """Transition proposal to next state."""
+    if request.target_status not in PROPOSAL_STATES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid target status: {request.target_status}",
+        )
+
+    proposal_not_found = False
+    not_owner = False
+    invalid_transition = False
+    transition_error_msg = ""
+    current_status = ""
+
+    try:
+        session_factory = get_session_factory()
+        async with session_factory() as session:
+            stmt = select(ImprovementProposal).where(ImprovementProposal.proposal_id == proposal_id)
+            result = await session.execute(stmt)
+            record = result.scalar_one_or_none()
+            if record is None:
+                proposal_not_found = True
+            elif not operator.is_global and record.tenant_id != operator.tenant_id:
+                not_owner = True
+            else:
+                current_status = record.status
+                allowed = VALID_TRANSITIONS.get(current_status, set())
+                if request.target_status not in allowed:
+                    invalid_transition = True
+                    transition_error_msg = (
+                        f"Cannot transition from {current_status} to {request.target_status}"
+                    )
+
+            if not proposal_not_found and not not_owner and not invalid_transition:
+                assert record is not None
+                record.status = request.target_status
+                if request.target_status == "EVALUATED" and request.eval_run_id:
+                    record.eval_run_id = request.eval_run_id
+                if request.target_status == "EVALUATED" and request.eval_result:
+                    record.eval_result = request.eval_result
+                if request.target_status == "APPROVED":
+                    record.approver = operator.operator_id
+                    record.approved_at = datetime.now(UTC)
+                if request.target_status == "CANARY" and request.canary_result:
+                    record.canary_result = request.canary_result
+                if request.target_status == "PROMOTED" and request.deployment_result:
+                    record.deployment_result = request.deployment_result
+                if request.target_status == "ROLLED_BACK":
+                    record.rolled_back_at = datetime.now(UTC)
+                    record.rollback_reason = request.rollback_reason
+
+                await session.commit()
+                await session.refresh(record)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to transition proposal: {exc}",
+        ) from exc
+
+    if proposal_not_found:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Proposal {proposal_id} not found",
+        )
+    if not_owner:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cannot modify proposals from other tenants",
+        )
+    if invalid_transition:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=transition_error_msg,
+        )
+
+    assert record is not None
+    return ProposalResponse(
+        proposal_id=record.proposal_id,
+        tenant_id=record.tenant_id,
+        failure_cluster_id=record.failure_cluster_id,
+        status=record.status,
+        baseline_config=record.baseline_config,
+        proposal_config=record.proposal_config,
+        eval_run_id=record.eval_run_id,
+        eval_result=record.eval_result,
+        approver=record.approver,
+        approved_at=record.approved_at,
+        canary_result=record.canary_result,
+        deployment_result=record.deployment_result,
+        rolled_back_at=record.rolled_back_at,
+        rollback_reason=record.rollback_reason,
+        created_at=record.created_at,
     )

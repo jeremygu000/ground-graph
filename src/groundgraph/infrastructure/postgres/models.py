@@ -691,6 +691,39 @@ class HumanReviewItem(Base):
     )
 
 
+class ImprovementProposal(Base):
+    __tablename__ = "improvement_proposals"
+
+    proposal_id: Mapped[UUID] = mapped_column(PG_UUID, primary_key=True, default=_gen_uuid)
+    tenant_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    failure_cluster_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="PROPOSED")
+    baseline_config: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    proposal_config: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    eval_run_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID, ForeignKey("evaluation_runs.run_id", ondelete="SET NULL"), nullable=True
+    )
+    eval_result: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    approver: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    canary_result: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    deployment_result: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    rolled_back_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    rollback_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=_utcnow
+    )
+
+    __table_args__ = (
+        Index("ix_improvement_proposals_tenant_id", "tenant_id"),
+        Index("ix_improvement_proposals_status", "status"),
+        Index("ix_improvement_proposals_failure_cluster", "failure_cluster_id"),
+    )
+
+
 class IngestionCheckpoint(Base):
     __tablename__ = "ingestion_checkpoints"
 
