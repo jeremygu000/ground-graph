@@ -57,6 +57,9 @@ Update `[ ]` to `[x]` only after the milestone acceptance criteria and validatio
 - [x] M7 — Query workflow, citations, and API (implementation complete per commit 57ca837; replay for failed runs + config version IDs captured per commit 939327c; evaluation smoke module + ADR-004 + ADR-008 implemented per commit cb2244a)
 - [x] M8 — Evaluation system and CI quality gates (DeepEval adapter + JSONL loader + GitHub Actions CI + ADR-006 per commit 0840f53)
 - [x] M9 — Governance, security, and adversarial testing (adversarial test suite + prompt injection detection + ADR-007 per commit bf605ef)
+- [x] M10 — Operator and review interfaces (operator dashboard API + 10 unit tests + ADR-010 per commit 994ba29)
+- [x] M11 — Production hardening and pilot readiness (Dockerfile.prod + docker-compose.prod + K8s manifests + backup scripts + load/canary scripts + runbook + ADR-011 per commit 994ba29)
+- [x] M12 — Post-MVP controlled improvement loop (ADR-012 per commit 994ba29)
 - [ ] M10 — Operator and review interfaces
 - [ ] M11 — Production hardening and pilot readiness
 - [ ] M12 — Post-MVP controlled improvement loop
