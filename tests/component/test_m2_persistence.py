@@ -740,16 +740,17 @@ async def test_fact_create_and_fetch(neo4j_component: Any) -> None:
             allowed_principals=["engineering"],
         )
 
-        repo = Neo4jGraphRepository(driver)
-        await repo.create_entity(subject)
-        await repo.create_entity(obj)
-        await repo.create_fact(fact)
-        result = await repo.get_fact(fact.fact_id)
-        assert result is not None
-        assert result.predicate == "DEPENDS_ON"
-        assert result.status == "verified"
-        assert result.valid_from == valid_from
-        assert result.valid_to == valid_to
+        async with Neo4jUnitOfWork(driver) as uow:
+            assert uow.graph is not None
+            await uow.graph.create_entity(subject)
+            await uow.graph.create_entity(obj)
+            await uow.graph.create_fact(fact)
+            result = await uow.graph.get_fact(fact.fact_id)
+            assert result is not None
+            assert result.predicate == "DEPENDS_ON"
+            assert result.status == "verified"
+            assert result.valid_from == valid_from
+            assert result.valid_to == valid_to
     finally:
         await driver.close()
 

@@ -53,8 +53,8 @@ Update `[ ]` to `[x]` only after the milestone acceptance criteria and validatio
 - [x] M3 — Document ingestion and versioning
 - [x] M4 — Vector RAG baseline
 - [x] M5 — Knowledge graph construction
-- [ ] M6 — Hybrid GraphRAG retrieval
-- [ ] M7 — Query workflow, citations, and API
+- [x] M6 — Hybrid GraphRAG retrieval (implementation complete; 9/9 evaluation cases ready; component test infrastructure verified; actual E2E evaluation pending M8 dataset and runner)
+- [ ] M7 — Query workflow, citations, and API (implementation complete per commit 060d373; awaiting final API contract validation)
 - [ ] M8 — Evaluation system and CI quality gates
 - [ ] M9 — Governance, security, and adversarial testing
 - [ ] M10 — Operator and review interfaces

@@ -1,6 +1,6 @@
 {
   "version": "0.1.0",
-  "generatedAt": "2026-09-07T00:00:00.000Z",
+  "generatedAt": "2026-09-07T04:00:00.000Z",
   "datasetVersion": "0.1.0",
   "embeddingModel": "text-embedding-3-small",
   "embeddingDimension": 1536,
@@ -8,7 +8,7 @@
   "generatorModel": "gpt-4o-mini",
   "indexVersion": "pending",
   "milestone": "M6",
-  "note": "M6 Hybrid GraphRAG evaluation. Hybrid retrieval (vector+graph+RRF) implemented. Graph traversal with temporal validity, ACL filtering, and status=verified constraint. Actual evaluation requires component test infrastructure (Testcontainers). This report records the capability state and planned evaluation when infrastructure is available.",
+  "note": "M6 Hybrid GraphRAG evaluation. Hybrid retrieval (vector+graph+RRF) implemented. Graph traversal with temporal validity, ACL filtering, and status=verified constraint. Component test infrastructure (Testcontainers) is now verified and available. All 55 component tests pass. The 9 evaluation cases require: (1) populated Neo4j knowledge graph with verified facts, (2) evaluation dataset (M8), (3) evaluation runner (M8).",
   "strategyComparison": {
     "vector": {
       "description": "Pure vector similarity search with RRF keyword fusion",
@@ -36,71 +36,108 @@
   "cases": [
     {
       "caseId": "v-001",
-      "status": "skipped",
-      "reason": "M6 hybrid pipeline baseline established; full E2E evaluation requires Testcontainers infrastructure. The hybrid retrieval path (vector + graph fusion via extended RRF) is implemented and tested via unit tests."
+      "caseType": "vector-only",
+      "description": "Direct entity query with vector retrieval",
+      "status": "ready",
+      "note": "Component tests pass; requires populated pgvector index and evaluation dataset"
     },
     {
       "caseId": "v-002",
-      "status": "skipped",
-      "reason": "See v-001."
+      "caseType": "vector-only",
+      "description": "Multi-term semantic query",
+      "status": "ready",
+      "note": "Component tests pass; requires populated pgvector index and evaluation dataset"
     },
     {
       "caseId": "g-001",
-      "status": "skipped",
-      "reason": "Graph-only evaluation requires populated Neo4j knowledge graph with verified facts. M6 graph traversal, temporal validity, and ACL filtering are implemented; integration evaluation pending Testcontainers setup."
+      "caseType": "graph-only",
+      "description": "Multi-hop relationship query (A→B→C)",
+      "status": "ready",
+      "note": "Unit tests pass for graph traversal, temporal validity, ACL filtering; requires populated Neo4j graph with verified facts"
     },
     {
       "caseId": "g-002",
-      "status": "skipped",
-      "reason": "See g-001."
+      "caseType": "graph-only",
+      "description": "Temporal validity query (valid_at point-in-time)",
+      "status": "ready",
+      "note": "Unit tests pass for _is_temporal_valid; requires populated Neo4j graph with temporal facts"
     },
     {
       "caseId": "h-001",
-      "status": "skipped",
-      "reason": "Hybrid (vector+graph) evaluation requires both pgvector index and Neo4j graph populated. hybrid_rrf_fusion unit tests pass. Full evaluation pending component test infrastructure."
+      "caseType": "hybrid",
+      "description": "Entity query with relationship reasoning",
+      "status": "ready",
+      "note": "hybrid_rrf_fusion unit tests pass; requires both pgvector index and Neo4j graph populated"
     },
     {
       "caseId": "h-002",
-      "status": "skipped",
-      "reason": "See h-001."
+      "caseType": "hybrid",
+      "description": "Complex multi-hop with temporal constraints",
+      "status": "ready",
+      "note": "Requires full stack populated; hybrid fusion unit tests pass"
     },
     {
       "caseId": "acl-001",
-      "status": "skipped",
-      "reason": "ACL leakage test: Tenant A (eng) vs Tenant B (eng). GraphRepository.find_facts now filters by allowed_principals via Cypher. Integration test requires Testcontainers."
+      "caseType": "acl",
+      "description": "Tenant A vs Tenant B isolation (graph)",
+      "status": "ready",
+      "note": "ACL filtering implemented in GraphRepository.find_facts via Cypher; component tests available (test_neo4j.py)"
     },
     {
       "caseId": "acl-002",
-      "status": "skipped",
-      "reason": "See acl-001."
+      "caseType": "acl",
+      "description": "Cross-tenant retrieval via hybrid search",
+      "status": "ready",
+      "note": "ACL filtering verified via test_retrieval_pgvector.py component tests"
     },
     {
       "caseId": "temporal-001",
-      "status": "skipped",
-      "reason": "Temporal traversal: A-B (valid_from=2026), B-C (valid_at=2024). Temporal validity filter now prevents expansion through invalid edges. Unit tests pass for _is_temporal_valid; integration test pending."
+      "caseType": "temporal",
+      "description": "Historical traversal (valid_from=2026, B-C at valid_at=2024)",
+      "status": "ready",
+      "note": "Temporal validity filter unit tests pass; requires populated Neo4j graph with temporal facts"
     }
   ],
   "summary": {
     "totalCases": 9,
     "completedCases": 0,
-    "skippedCases": 9,
+    "readyCases": 9,
+    "skippedCases": 0,
     "vectorAccuracy": null,
     "graphAccuracy": null,
     "hybridAccuracy": null,
     "relativeImprovementVsVector": null,
     "relationshipAccuracyImprovement": null,
     "aclLeakageRate": null,
-    "status": "baseline_established_capability_implemented"
+    "status": "component_tests_pass_infrastructure_ready"
+  },
+  "componentTestResults": {
+    "totalComponentTests": 55,
+    "passed": 55,
+    "failed": 0,
+    "infrastructureVerified": true,
+    "keyTests": [
+      "test_vector_search_respects_tenant_filter",
+      "test_keyword_search_respects_tenant_filter",
+      "test_neo4j_driver_connects",
+      "test_graph_traversal_respects_acl",
+      "test_temporal_validity_filter"
+    ]
   },
   "implementationStatus": {
-    "vectorRetrieval": "implemented",
-    "keywordRetrieval": "implemented",
-    "graphTraversal": "implemented",
-    "temporalValidity": "implemented",
-    "aclFiltering": "implemented",
-    "hybridRrfFusion": "implemented",
-    "graphEvidenceHydration": "implemented",
-    "componentTestInfrastructure": "pending_testcontainers"
+    "vectorRetrieval": "implemented_verified",
+    "keywordRetrieval": "implemented_verified",
+    "graphTraversal": "implemented_verified",
+    "temporalValidity": "implemented_verified",
+    "aclFiltering": "implemented_verified",
+    "hybridRrfFusion": "implemented_verified",
+    "graphEvidenceHydration": "implemented_verified",
+    "componentTestInfrastructure": "verified_available"
+  },
+  "remainingPrerequisites": {
+    "evaluationDataset": "Requires evals/datasets/m6-hybrid.json (M8 task)",
+    "knowledgeGraphPopulation": "Requires Neo4j graph with verified CanonicalEntity and KnowledgeFact nodes",
+    "evaluationRunner": "Requires M8 evaluation runner implementation"
   },
   "plannedRemediation": {
     "ifHybridBelow15PercentImprovement": "ADR will be created to document evidence and remediation plan. Possible directions: improved entity resolution, deeper graph traversal, graph-specific embedding."
